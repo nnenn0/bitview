@@ -1,0 +1,46 @@
+name: CI
+
+# ブランチの変更は PR で検証する。main への push はマージ後の確認とキャッシュの保存を兼ねる。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # genbit と同じ版で検査する。Dependabot が Dockerfile だけを更新したときのずれを止める。
+      - name: Check Rust version consistency
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$toolchain"
+          grep -qx "rust-version = \"$toolchain\"" Cargo.toml
+          grep -qx "FROM rust:$toolchain-bookworm" Dockerfile
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Run doc tests
+        run: cargo test --locked --doc
