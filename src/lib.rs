@@ -75,6 +75,13 @@ impl Program {
             .is_some_and(|(_, function)| function.arity == 1)
     }
 
+    /// Where the function `name` is defined, which lets a host tie functions to the files that
+    /// define them.
+    #[must_use]
+    pub fn defined_at(&self, name: &str) -> Option<&Span> {
+        self.function(name).map(|(_, function)| &function.span)
+    }
+
     /// Calls the function `entry` with `ctx` and returns the HTML it builds.
     ///
     /// # Errors
@@ -117,6 +124,25 @@ impl Program {
             ));
         }
         Ok((index, function))
+    }
+
+    /// The functions that rendering `entry` may call, including `entry` itself. Each function
+    /// comes after the functions it calls, and functions called side by side keep the order of
+    /// the calls in the source. Both branches of every `if` count, so the list depends only on
+    /// the program, not on the data. Returns `None` if there is no function `entry`.
+    ///
+    /// A host can use it to attach resources to functions, such as one CSS file per function,
+    /// in an order where the callers come last.
+    #[must_use]
+    pub fn functions_used_by(&self, entry: &str) -> Option<Vec<&str>> {
+        let (index, _) = self.function(entry)?;
+        Some(
+            resolve::used_by(&self.functions, index)
+                .into_iter()
+                .filter_map(|function| self.functions.get(function))
+                .map(|function| function.name.as_str())
+                .collect(),
+        )
     }
 
     fn function(&self, name: &str) -> Option<(usize, &Function)> {

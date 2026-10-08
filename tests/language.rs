@@ -455,6 +455,14 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
     ])?;
     let ctx = Value::record([("name", Value::from("n"))]);
     assert_eq!(program.render("page", ctx)?.to_fragment(), "<p>n</p>");
+    let defined = program
+        .defined_at("helper")
+        .ok_or("helper is not defined")?;
+    assert_eq!(
+        (defined.source(), defined.line(), defined.column()),
+        ("b.bitview", 1, 1)
+    );
+    assert!(program.defined_at("p").is_none());
     let error = Program::parse(&[
         Source {
             name: "a.bitview",
@@ -471,6 +479,31 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
         error.to_string(),
         "b.bitview:2:1: function page is defined twice (first defined at a.bitview:1:1)"
     );
+    Ok(())
+}
+
+#[test]
+fn functions_used_by_lists_callees_before_callers() -> Result<()> {
+    let program = parse(
+        r#"
+        fn page(ctx) => layout(home(ctx), if ctx.flag then item(ctx) else [])
+        fn layout(top, rest) => html(body(top, rest))
+        fn home(ctx) => a({href: "/"}, base(ctx))
+        fn item(ctx) => ul(map(ctx.items, base))
+        fn base(x) => x.title
+        fn unused(ctx) => ctx
+    "#,
+    )?;
+    assert_eq!(
+        program.functions_used_by("page"),
+        Some(vec!["layout", "base", "home", "item", "page"])
+    );
+    assert_eq!(
+        program.functions_used_by("item"),
+        Some(vec!["base", "item"])
+    );
+    assert_eq!(program.functions_used_by("base"), Some(vec!["base"]));
+    assert_eq!(program.functions_used_by("missing"), None);
     Ok(())
 }
 

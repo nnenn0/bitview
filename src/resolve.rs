@@ -305,3 +305,29 @@ impl Search<'_> {
         )
     }
 }
+
+pub(crate) fn used_by(functions: &[Function], entry: usize) -> Vec<usize> {
+    let mut visited = vec![false; functions.len()];
+    let mut order = Vec::new();
+    post_order(functions, entry, &mut visited, &mut order);
+    order
+}
+
+fn post_order(
+    functions: &[Function],
+    function: usize,
+    visited: &mut [bool],
+    order: &mut Vec<usize>,
+) {
+    match visited.get_mut(function) {
+        Some(seen @ false) => *seen = true,
+        _ => return,
+    }
+    for (callee, _) in functions
+        .get(function)
+        .map_or(&[][..], |function| function.calls.as_slice())
+    {
+        post_order(functions, *callee, visited, order);
+    }
+    order.push(function);
+}
