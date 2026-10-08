@@ -1,6 +1,6 @@
 # bitview
 
-HTML を、少数の値と関数だけで組み立てる小さい純粋関数型テンプレート言語。静的サイトジェネレーター [genbit](https://github.com/nnenn0/genbit) のテンプレートを書くために作っており、genbit から Rust のクレートとして使う。
+HTML を、少数の値と関数だけで組み立てる小さい純粋関数型テンプレート言語。静的サイトジェネレーター [genbit](https://github.com/nnenn0/genbit) のテンプレートを書くために作っており、genbit から Rust のクレートとして使う。ソースファイルの拡張子は `.bv` とする。
 
 ```
 fn page(ctx) =>

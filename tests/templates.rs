@@ -5,15 +5,12 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn program() -> Result<Program> {
     let sources = [
-        ("layout.bitview", include_str!("templates/layout.bitview")),
-        ("page.bitview", include_str!("templates/page.bitview")),
-        ("root.bitview", include_str!("templates/root.bitview")),
-        ("tag.bitview", include_str!("templates/tag.bitview")),
-        ("tags.bitview", include_str!("templates/tags.bitview")),
-        (
-            "not-found.bitview",
-            include_str!("templates/not-found.bitview"),
-        ),
+        ("layout.bv", include_str!("templates/layout.bv")),
+        ("page.bv", include_str!("templates/page.bv")),
+        ("root.bv", include_str!("templates/root.bv")),
+        ("tag.bv", include_str!("templates/tag.bv")),
+        ("tags.bv", include_str!("templates/tags.bv")),
+        ("not-found.bv", include_str!("templates/not-found.bv")),
     ];
     let sources = sources.map(|(name, text)| Source { name, text });
     Ok(Program::parse(&sources)?)

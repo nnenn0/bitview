@@ -4,10 +4,7 @@ use std::error::Error;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn parse(text: &str) -> std::result::Result<Program, BitviewError> {
-    Program::parse(&[Source {
-        name: "t.bitview",
-        text,
-    }])
+    Program::parse(&[Source { name: "t.bv", text }])
 }
 
 fn render(text: &str, ctx: Value) -> std::result::Result<String, BitviewError> {
@@ -272,12 +269,12 @@ fn errors_point_to_the_source_and_the_running_functions() -> Result<()> {
     let error = render_error(text, ctx)?;
     assert_eq!(
         error.to_string(),
-        "t.bitview:5:10: unknown field \"titel\" (fields: title)\n  in meta-line (called at t.bitview:2:7)\n  in page"
+        "t.bv:5:10: unknown field \"titel\" (fields: title)\n  in meta-line (called at t.bv:2:7)\n  in page"
     );
     let error = parse_error("fn page(ctx) =>\n  p(\"a\" \"b\")")?;
     assert_eq!(
         error.to_string(),
-        "t.bitview:2:9: expected `,` or `)`, found a string"
+        "t.bv:2:9: expected `,` or `)`, found a string"
     );
     Ok(())
 }
@@ -445,11 +442,11 @@ fn entry_functions_take_one_value_and_return_html() -> Result<()> {
 fn functions_share_one_namespace_across_sources() -> Result<()> {
     let program = Program::parse(&[
         Source {
-            name: "a.bitview",
+            name: "a.bv",
             text: "fn page(ctx) => p(helper(ctx))",
         },
         Source {
-            name: "b.bitview",
+            name: "b.bv",
             text: "fn helper(x) => x.name",
         },
     ])?;
@@ -460,16 +457,16 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
         .ok_or("helper is not defined")?;
     assert_eq!(
         (defined.source(), defined.line(), defined.column()),
-        ("b.bitview", 1, 1)
+        ("b.bv", 1, 1)
     );
     assert!(program.defined_at("p").is_none());
     let error = Program::parse(&[
         Source {
-            name: "a.bitview",
+            name: "a.bv",
             text: "fn page(ctx) => ctx",
         },
         Source {
-            name: "b.bitview",
+            name: "b.bv",
             text: "\nfn page(ctx) => ctx",
         },
     ])
@@ -477,7 +474,7 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
     .ok_or("accepted a duplicate function")?;
     assert_eq!(
         error.to_string(),
-        "b.bitview:2:1: function page is defined twice (first defined at a.bitview:1:1)"
+        "b.bv:2:1: function page is defined twice (first defined at a.bv:1:1)"
     );
     Ok(())
 }
@@ -555,7 +552,7 @@ fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
     let error = check_error(text, &post_type())?;
     assert_eq!(
         error.to_string(),
-        "t.bitview:2:30: unknown field \"titel\" (fields: flag, title, items)\n  in page"
+        "t.bv:2:30: unknown field \"titel\" (fields: flag, title, items)\n  in page"
     );
     // Rendering with this value takes the else branch and maps nothing, so it meets neither error.
     let ctx = Value::record([
