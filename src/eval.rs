@@ -1,7 +1,7 @@
 use crate::{
     Html, Value,
     ast::{Callee, Expr},
-    error::{Error, ErrorKind, Span},
+    error::{Error, Span},
     html::{self, ElementSpec, Node},
     resolve::{FunctionId, Functions},
 };
@@ -23,7 +23,11 @@ impl Evaluator<'_> {
     fn eval(&self, expr: &Expr, args: &[Value]) -> Result<Value, Error> {
         match expr {
             Expr::Str(text) => Ok(Value::String(text.clone())),
-            Expr::Param(_) | Expr::Field(..) => self.read(expr, args),
+            #[expect(clippy::indexing_slicing, reason = "every call passes every argument")]
+            Expr::Param(position) => Ok(args[*position].clone()),
+            Expr::Field(record, name, span) => self
+                .read_field(record, name, args)
+                .map_err(|error| error.with_span(span)),
             Expr::List(items, _) => self.eval_all(items, args).map(Value::List),
             Expr::Record(fields) => fields
                 .iter()
@@ -50,17 +54,13 @@ impl Evaluator<'_> {
     }
 
     /// Paths such as `ctx.article.title` are followed by reference, so that only the value at the
-    /// end is copied, not the whole argument with the article's HTML.
-    fn read(&self, expr: &Expr, args: &[Value]) -> Result<Value, Error> {
-        if let Some(value) = borrow_path(expr, args)? {
-            return Ok(value.clone());
+    /// end is copied, not the whole argument with the article's HTML. A record built here, such as
+    /// the result of a call, is owned, so the field is moved out of it instead.
+    fn read_field(&self, record: &Expr, name: &str, args: &[Value]) -> Result<Value, Error> {
+        match borrow_path(record, args)? {
+            Some(record) => field(record, name).cloned(),
+            None => into_field(self.eval(record, args)?, name),
         }
-        let Expr::Field(record, name, span) = expr else {
-            return Err(Error::new(ErrorKind::Name, "internal error: not a path"));
-        };
-        // The record is built here and owned, so the field can be moved out of it.
-        let record = self.eval(record, args)?;
-        into_field(record, name).map_err(|error| error.with_span(span))
     }
 
     fn eval_all(&self, exprs: &[Expr], args: &[Value]) -> Result<Vec<Value>, Error> {
