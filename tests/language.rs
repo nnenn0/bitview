@@ -54,10 +54,10 @@ fn attributes_are_escaped_in_order() -> Result<()> {
     );
     assert_eq!(
         render(
-            r#"fn page(ctx) => meta({http-equiv: "x", "content": "y"})"#,
+            r#"fn page(ctx) => span({aria-label: "x", "data-id": "y"})"#,
             empty()
         )?,
-        "<meta http-equiv=\"x\" content=\"y\">"
+        "<span aria-label=\"x\" data-id=\"y\"></span>"
     );
     Ok(())
 }
@@ -567,6 +567,20 @@ fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
     assert_eq!(
         error.trace().first().map(bitview::Frame::function),
         Some("item")
+    );
+    Ok(())
+}
+
+#[test]
+fn check_finds_misspelled_attributes() -> Result<()> {
+    let text = "fn page(ctx) =>\n  div(if ctx.flag then a({herf: \"/\"}, ctx.title) else [])";
+    let error = check_error(text, &post_type())?;
+    assert_eq!(error.kind(), ErrorKind::Html);
+    assert!(
+        error
+            .to_string()
+            .starts_with("t.bv:2:24: <a> has no attribute \"herf\"; it takes href,"),
+        "{error}"
     );
     Ok(())
 }
