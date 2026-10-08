@@ -1,4 +1,4 @@
-// Every function is defined as `fn name(params) =>`, and the .bitview files of a program share one
+// Every function is defined as `fn name(params) =>`, and the .bv files of a program share one
 // namespace. So regular expressions over the code find definitions and references without a parser.
 
 const NAME = "[a-z][a-z0-9]*(?:-[a-z0-9]+)*";
@@ -92,7 +92,7 @@ function activate(context) {
   const vscode = require("vscode");
   const selector = { language: "bitview" };
 
-  /** genbit reads every .bitview under views/ as one program. Outside views/, a directory is one. */
+  /** genbit reads every .bv under views/ as one program. Outside views/, a directory is one. */
   function programRoot(uri) {
     const parts = uri.path.split("/");
     const views = parts.lastIndexOf("views", parts.length - 2);
@@ -105,7 +105,7 @@ function activate(context) {
       const uri = vscode.Uri.joinPath(directory, name);
       if (name.startsWith(".")) continue;
       if (type === vscode.FileType.Directory) found.push(...(await bitviewFiles(uri)));
-      else if (type === vscode.FileType.File && name.endsWith(".bitview")) found.push(uri);
+      else if (type === vscode.FileType.File && name.endsWith(".bv")) found.push(uri);
     }
     return found;
   }
@@ -177,7 +177,7 @@ function activate(context) {
     }),
     vscode.languages.registerWorkspaceSymbolProvider({
       async provideWorkspaceSymbols(query) {
-        const uris = await vscode.workspace.findFiles("**/*.bitview", "**/{node_modules,dist,target}/**");
+        const uris = await vscode.workspace.findFiles("**/*.bv", "**/{node_modules,dist,target}/**");
         const documents = await Promise.all(uris.map((uri) => vscode.workspace.openTextDocument(uri)));
         return (await definitions(documents))
           .filter((definition) => definition.name.includes(query))

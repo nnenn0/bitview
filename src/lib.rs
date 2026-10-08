@@ -7,7 +7,7 @@
 //! use bitview::{Html, Program, Source, Value};
 //!
 //! let program = Program::parse(&[Source {
-//!     name: "page.bitview",
+//!     name: "page.bv",
 //!     text: r#"fn page(ctx) => html(body(h1(ctx.title), ctx.content))"#,
 //! }])?;
 //! let ctx = Value::record([
@@ -42,7 +42,7 @@ use ast::Function;
 use resolve::Index;
 use std::sync::Arc;
 
-/// A template source and the name errors use for it, such as `templates/page.bitview`.
+/// A template source and the name errors use for it, such as `templates/page.bv`.
 #[derive(Debug, Clone, Copy)]
 pub struct Source<'a> {
     pub name: &'a str,
