@@ -44,7 +44,7 @@ fn tag-item(tag) => li(a({href: tag.url}, tag.name))
 ## HTML の安全性
 
 - String は、シリアライザーが必ずエスケープする。Html は構築 API でしか作れず、テンプレートから HTML 文字列を Html にする手段（`raw`、`safe`）はない。
-- `href`・`src`・`cite` は、スキームが `http`・`https`・`mailto` か相対 URL でなければエラーにする。
+- `href`・`src`・`cite`・`background` と、複数の URL を並べる `srcset`・`imagesrcset`・`ping` は、どの URL もスキームが `http`・`https`・`mailto` か相対 URL でなければエラーにする。
 - `script`・`style` 要素、`on*` 属性、`style` 属性は、テンプレートからもホストの Rust からも作れない。`<style>` と JSON のデータ（JSON-LD など）だけは、ホストが `Html::style`・`Html::json` で作って渡す。`Html::json` が受け付けるのは、ブラウザーがスクリプトとして実行しない JSON の MIME タイプ（`application/json` と `application/…+json`）だけ。
 
 ## 機能を足すとき
