@@ -50,7 +50,12 @@ pub struct Source<'a> {
     pub text: &'a str,
 }
 
-/// Parsed and checked functions from all sources, sharing one namespace.
+/// Parsed and checked functions from all sources.
+///
+/// Functions defined with `defn` share one namespace across the sources, and the host calls them
+/// by name. A function defined with `defn-` is private to its source: only that source can call
+/// it, a private function of another source may share its name, and within its source it hides
+/// a public function of the same name. The host cannot name a private function.
 pub struct Program {
     functions: Functions,
 }
@@ -62,25 +67,28 @@ impl Program {
     ///
     /// Returns the first syntax, name, arity, or recursion error, with its position.
     pub fn parse(sources: &[Source<'_>]) -> Result<Self, Error> {
-        let mut defs = Vec::new();
-        for source in sources {
-            let name: Arc<str> = Arc::from(source.name);
-            defs.extend(parser::parse(lexer::tokenize(&name, source.text)?)?);
-        }
+        let defs = sources
+            .iter()
+            .map(|source| {
+                let name: Arc<str> = Arc::from(source.name);
+                parser::parse(lexer::tokenize(&name, source.text)?)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             functions: resolve::resolve(defs)?,
         })
     }
 
-    /// Whether `name` is a function with one parameter, which [`Program::render`] can call.
+    /// Whether `name` is a public function with one parameter, which [`Program::render`] can
+    /// call.
     #[must_use]
     pub fn has_entry(&self, name: &str) -> bool {
         self.function(name)
             .is_some_and(|function| function.arity == 1)
     }
 
-    /// Where the function `name` is defined, which lets a host tie functions to the files that
-    /// define them.
+    /// Where the public function `name` is defined, which lets a host tie functions to the files
+    /// that define them.
     #[must_use]
     pub fn defined_at(&self, name: &str) -> Option<&Span> {
         self.function(name).map(|function| &function.span)
@@ -129,11 +137,11 @@ impl Program {
         }
     }
 
-    /// Calls the function `entry` with `ctx` and returns the HTML it builds.
+    /// Calls the public function `entry` with `ctx` and returns the HTML it builds.
     ///
     /// # Errors
     ///
-    /// Fails if `entry` is not a function with one parameter, if evaluation fails, or if the
+    /// Fails if `entry` is not a public function with one parameter, if evaluation fails, or if the
     /// function returns something that does not stand for HTML. Evaluation errors carry the
     /// functions that were running.
     pub fn render(&self, entry: &str, ctx: Value) -> Result<Html, Error> {
@@ -147,10 +155,21 @@ impl Program {
 
     fn entry(&self, name: &str) -> Result<(FunctionId, &Function), Error> {
         let id = self.functions.find(name).ok_or_else(|| {
-            Error::new(
-                ErrorKind::Name,
-                format!("the templates define no function {name}"),
-            )
+            let private = self
+                .functions
+                .iter()
+                .find(|(_, function)| function.name == name);
+            match private {
+                Some((_, function)) => Error::at(
+                    ErrorKind::Name,
+                    &function.span,
+                    format!("{name} is defined with defn-, so only its source can call it"),
+                ),
+                None => Error::new(
+                    ErrorKind::Name,
+                    format!("the templates define no function {name}"),
+                ),
+            }
         })?;
         let function = self.functions.get(id);
         if function.arity != 1 {
@@ -163,10 +182,13 @@ impl Program {
         Ok((id, function))
     }
 
-    /// The functions that rendering `entry` may call, including `entry` itself. Each function
-    /// comes after the functions it calls, and functions called side by side keep the order of
-    /// the calls in the source. Both branches of every `if` count, so the list depends only on
-    /// the program, not on the data. Returns `None` if there is no function `entry`.
+    /// The public functions that rendering `entry` may call, including `entry` itself. Each
+    /// function comes after the functions it calls, and functions called side by side keep the
+    /// order of the calls in the source. Calls through private functions count, but the private
+    /// functions themselves are left out: their names are not unique, and they belong to the
+    /// public functions of their source. Both branches of every `if` count, so the list depends
+    /// only on the program, not on the data. Returns `None` if there is no public function
+    /// `entry`.
     ///
     /// A host can use it to attach resources to functions, such as one CSS file per function,
     /// in an order where the callers come last.
@@ -177,7 +199,9 @@ impl Program {
             self.functions
                 .used_by(entry)
                 .into_iter()
-                .map(|id| self.functions.get(id).name.as_str())
+                .map(|id| self.functions.get(id))
+                .filter(|function| function.public)
+                .map(|function| function.name.as_str())
                 .collect(),
         )
     }

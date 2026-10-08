@@ -2,6 +2,9 @@ use crate::{error::Span, html::ElementSpec, resolve::FunctionId};
 
 pub(crate) struct Def {
     pub(crate) name: String,
+    /// Whether other sources and the host can call it. `defn-` defines a function that only its
+    /// own source can call.
+    pub(crate) public: bool,
     pub(crate) params: Vec<(String, Span)>,
     pub(crate) body: Syntax,
     pub(crate) span: Span,
@@ -20,6 +23,7 @@ pub(crate) enum Syntax {
 
 pub(crate) struct Function {
     pub(crate) name: String,
+    pub(crate) public: bool,
     pub(crate) arity: usize,
     pub(crate) body: Expr,
     pub(crate) span: Span,

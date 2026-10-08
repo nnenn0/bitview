@@ -498,6 +498,132 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
     Ok(())
 }
 
+fn sources<'a>(texts: &[(&'a str, &'a str)]) -> Vec<Source<'a>> {
+    texts
+        .iter()
+        .map(|&(name, text)| Source { name, text })
+        .collect()
+}
+
+#[test]
+fn private_functions_belong_to_their_source() -> Result<()> {
+    // Both sources keep a private item, and a.bv's hides the public item of c.bv.
+    let program = Program::parse(&sources(&[
+        (
+            "a.bv",
+            "(defn page [ctx] (div (ul (map ctx.items item)) (tags ctx)))\n(defn- item [x] (li x))",
+        ),
+        (
+            "b.bv",
+            "(defn tags [ctx] (ol (map ctx.items item)))\n(defn- item [x] (li (b x)))",
+        ),
+        ("c.bv", "(defn item [x] (p x))\n(defn b [x] (span x))"),
+    ]))?;
+    let ctx = Value::record([("items", Value::from(vec![Value::from("x")]))]);
+    let ctx_type = Type::record([("items", Type::list(Type::String))]);
+    assert_eq!(
+        program.render("page", ctx.clone())?.to_fragment(),
+        "<div><ul><li>x</li></ul><ol><li><span>x</span></li></ol></div>"
+    );
+    program.check(&[("page", ctx_type), ("item", Type::String)])?;
+    // The host names only public functions.
+    assert!(program.has_entry("tags"));
+    assert!(!program.has_entry("missing"));
+    let error = Program::parse(&sources(&[(
+        "a.bv",
+        "(defn page [ctx] (inner ctx))\n(defn- inner [ctx] (p ctx))",
+    )]))?
+    .render("inner", ctx)
+    .err()
+    .ok_or("rendered a private function")?;
+    assert_eq!(
+        error.to_string(),
+        "a.bv:2:1: inner is defined with defn-, so only its source can call it"
+    );
+    Ok(())
+}
+
+#[test]
+fn private_functions_cannot_be_called_from_other_sources() -> Result<()> {
+    let error = Program::parse(&sources(&[
+        ("a.bv", "(defn page [ctx] (p (helper ctx)))"),
+        ("b.bv", "(defn- helper [x] x)"),
+    ]))
+    .err()
+    .ok_or("called a private function of another source")?;
+    assert_eq!(
+        error.to_string(),
+        "a.bv:1:22: helper is defined with defn- in b.bv, so only that source can call it"
+    );
+    let error = Program::parse(&sources(&[
+        ("a.bv", "(defn page [ctx] (ul (map ctx helper)))"),
+        ("b.bv", "(defn- helper [x] (li x))"),
+    ]))
+    .err()
+    .ok_or("mapped a private function of another source")?;
+    assert_eq!(error.kind(), ErrorKind::Name);
+    assert!(error.message().contains("defn- in b.bv"), "{error}");
+    Ok(())
+}
+
+#[test]
+fn a_source_defines_each_name_once() -> Result<()> {
+    for text in [
+        "(defn- item [x] x)\n(defn- item [x] x)",
+        "(defn item [x] x)\n(defn- item [x] x)",
+        "(defn- item [x] x)\n(defn item [x] x)",
+        "(defn- p [x] x)",
+    ] {
+        assert_eq!(parse_error(text)?.kind(), ErrorKind::Name, "{text}");
+    }
+    let error = parse_error("(defn- item [x] x)\n(defn item [x] x)")?;
+    assert_eq!(
+        error.to_string(),
+        "t.bv:2:1: function item is defined twice (first defined at t.bv:1:1)"
+    );
+    for text in [
+        "(defn-item [x] x)",
+        "(defn page [ctx] (p defn-))",
+        "(defn page [ctx] (p (defn- ctx)))",
+        "(defn page [ctx] defn-.x)",
+    ] {
+        assert_eq!(parse_error(text)?.kind(), ErrorKind::Syntax, "{text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn check_rejects_private_functions_no_entry_calls() -> Result<()> {
+    let text = "(defn page [ctx] (p ctx.title))\n(defn- unused [x] (p x))";
+    let error = check_error(text, &post_type())?;
+    assert_eq!(
+        error.to_string(),
+        "t.bv:2:1: function unused is not called from page, so it cannot be checked; call it or remove it"
+    );
+    Ok(())
+}
+
+#[test]
+fn functions_used_by_skips_private_functions_but_not_their_callees() -> Result<()> {
+    let program = Program::parse(&sources(&[
+        (
+            "page.bv",
+            "(defn page [ctx] (body (top ctx) (entry-list ctx.items)))\n(defn- top [ctx] (h1 (home ctx)))",
+        ),
+        ("home.bv", "(defn home [ctx] (a {:href \"/\"} ctx.title))"),
+        (
+            "entry-list.bv",
+            "(defn entry-list [items] (ul (map items item)))\n(defn- item [x] (li x))",
+        ),
+    ]))?;
+    assert_eq!(
+        program.functions_used_by("page"),
+        Some(vec!["home", "entry-list", "page"])
+    );
+    assert_eq!(program.functions_used_by("top"), None);
+    Ok(())
+}
+
 #[test]
 fn functions_used_by_lists_callees_before_callers() -> Result<()> {
     let program = parse(

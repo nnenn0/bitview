@@ -1,8 +1,10 @@
-// Every function is defined as `(defn name [params] ...)`, and the .bv files of a program share one
-// namespace. So regular expressions over the code find definitions and references without a parser.
+// Every function is defined as `(defn name [params] ...)` or, private to its file, as
+// `(defn- name [params] ...)`. Public functions share one namespace across the .bv files of a
+// program, and a private one hides a public one of the same name within its file. So regular
+// expressions over the code find definitions and references without a parser.
 
 const NAME = "[a-z][a-z0-9]*(?:-[a-z0-9]+)*";
-const DEFINITION = new RegExp(`\\(\\s*defn\\s+(${NAME})\\s*\\[([^\\]]*)\\]`, "g");
+const DEFINITION = new RegExp(`\\(\\s*defn(-?)\\s+(${NAME})\\s*\\[([^\\]]*)\\]`, "g");
 const PARAM = new RegExp(NAME, "g");
 
 /** `text` with strings and comments replaced by spaces, so that every offset stays the same. */
@@ -39,13 +41,14 @@ function codeOnly(text) {
 function definitionsIn(text) {
   const found = [];
   for (const match of codeOnly(text).matchAll(DEFINITION)) {
-    const nameOffset = match.index + match[0].indexOf(match[1], match[0].indexOf("defn") + 4);
+    const [, hyphen, name, paramList] = match;
+    const nameOffset = match.index + match[0].indexOf(name, match[0].indexOf("defn") + 4);
     const paramsOffset = match.index + match[0].indexOf("[") + 1;
-    const params = [...match[2].matchAll(PARAM)].map((param) => ({
+    const params = [...paramList.matchAll(PARAM)].map((param) => ({
       name: param[0],
       offset: paramsOffset + param.index,
     }));
-    found.push({ name: match[1], offset: nameOffset, start: match.index, params });
+    found.push({ name, offset: nameOffset, start: match.index, params, private: hyphen === "-" });
   }
   return found;
 }
@@ -71,6 +74,23 @@ function occurrencesIn(text, symbol) {
     found.push({ offset: match.index, length: name.length });
   }
   return found;
+}
+
+/**
+ * The documents where the name of the function `name` in `document` means the same function, each
+ * with its definitions of it: `document` alone if it defines `name` with `defn-`, and otherwise
+ * every document that does not keep a private `name` of its own.
+ */
+function functionScope(document, name, documents) {
+  const named = (candidate, isPrivate) =>
+    definitionsIn(candidate.getText()).filter(
+      (definition) => definition.name === name && definition.private === isPrivate,
+    );
+  const own = named(document, true);
+  if (own.length > 0) return [{ document, definitions: own }];
+  return documents
+    .filter((candidate) => named(candidate, true).length === 0)
+    .map((candidate) => ({ document: candidate, definitions: named(candidate, false) }));
 }
 
 function wordOf(text, offset) {
@@ -140,9 +160,9 @@ function activate(context) {
         if (!found) return null;
         const { symbol, word } = found;
         if (symbol.kind === "param") return location(document, symbol.declaration, word.length);
-        return (await definitions(await programDocuments(document)))
-          .filter((definition) => definition.name === symbol.name)
-          .map((definition) => location(definition.document, definition.offset, definition.name.length));
+        return functionScope(document, symbol.name, await programDocuments(document)).flatMap((scope) =>
+          scope.definitions.map((definition) => location(scope.document, definition.offset, word.length)),
+        );
       },
     }),
     vscode.languages.registerReferenceProvider(selector, {
@@ -150,17 +170,13 @@ function activate(context) {
         const found = lookup(document.getText(), document.offsetAt(position));
         if (!found) return null;
         const { symbol } = found;
-        const documents = symbol.kind === "param" ? [document] : await programDocuments(document);
-        return documents.flatMap((candidate) => {
-          const text = candidate.getText();
-          const declarations = new Set(
-            symbol.kind === "param"
-              ? [symbol.declaration]
-              : definitionsIn(text)
-                  .filter((definition) => definition.name === symbol.name)
-                  .map((definition) => definition.offset),
-          );
-          return occurrencesIn(text, symbol)
+        const scopes =
+          symbol.kind === "param"
+            ? [{ document, definitions: [{ offset: symbol.declaration }] }]
+            : functionScope(document, symbol.name, await programDocuments(document));
+        return scopes.flatMap(({ document: candidate, definitions: declared }) => {
+          const declarations = new Set(declared.map((definition) => definition.offset));
+          return occurrencesIn(candidate.getText(), symbol)
             .filter((occurrence) => referenceContext.includeDeclaration || !declarations.has(occurrence.offset))
             .map((occurrence) => location(candidate, occurrence.offset, occurrence.length));
         });
@@ -197,4 +213,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, codeOnly, definitionsIn, lookup, occurrencesIn };
+module.exports = { activate, deactivate, codeOnly, definitionsIn, functionScope, lookup, occurrencesIn };

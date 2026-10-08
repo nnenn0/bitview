@@ -10,6 +10,8 @@ pub(crate) enum Token {
     Key(String),
     Str(String),
     Defn,
+    /// `defn-`, which defines a function that only its own source can call.
+    DefnPrivate,
     If,
     LParen,
     RParen,
@@ -27,6 +29,7 @@ impl fmt::Display for Token {
             Self::Key(name) => return write!(formatter, "`:{name}`"),
             Self::Str(_) => return formatter.write_str("a string"),
             Self::Defn => "defn",
+            Self::DefnPrivate => "defn-",
             Self::If => "if",
             Self::LParen => "(",
             Self::RParen => ")",
@@ -87,7 +90,13 @@ pub(crate) fn tokenize(source: &Arc<str>, text: &str) -> Result<Tokens, Error> {
                 }
             }
             'a'..='z' => {
-                let token = keyword_or_name(lexer.ident(character, &span)?);
+                // `defn-` is the only word that ends with a hyphen.
+                let word = lexer.word(character);
+                let token = if word == "defn-" {
+                    Token::DefnPrivate
+                } else {
+                    keyword_or_name(lexer.name(word, &span)?)
+                };
                 if !matches!(token, Token::Name(_)) && lexer.chars.peek() == Some(&'.') {
                     return Err(Error::at(
                         ErrorKind::Syntax,
@@ -193,14 +202,25 @@ impl Lexer<'_> {
     }
 
     fn ident(&mut self, first: char, start: &Span) -> Result<String, Error> {
-        let mut name = String::from(first);
+        let word = self.word(first);
+        self.name(word, start)
+    }
+
+    /// Reads the lowercase letters, digits, and hyphens that start with `first`.
+    fn word(&mut self, first: char) -> String {
+        let mut word = String::from(first);
         while let Some(&character) = self.chars.peek() {
             if !(character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-') {
                 break;
             }
-            name.push(character);
+            word.push(character);
             self.bump();
         }
+        word
+    }
+
+    /// `name` if the word just read follows [`NAME_RULE`].
+    fn name(&mut self, name: String, start: &Span) -> Result<String, Error> {
         let continues = self
             .chars
             .peek()

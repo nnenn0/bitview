@@ -1,7 +1,7 @@
 (defn layout [ctx page-title description og-type header-content main-content]
   (document ctx page-title (seo ctx page-title description og-type) header-content main-content))
 
-(defn seo [ctx page-title description og-type]
+(defn- seo [ctx page-title description og-type]
   [(meta {:name "description" :content description})
    (link {:rel "canonical" :href ctx.canonical-url})
    (meta {:property "og:title" :content page-title})

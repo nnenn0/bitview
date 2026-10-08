@@ -89,7 +89,16 @@ impl Parser {
     fn def(&mut self) -> Result<Def, Error> {
         let expected = "a function definition, as in (defn page [ctx] ...)";
         let span = self.expect(&Token::LParen, expected)?;
-        self.expect(&Token::Defn, expected)?;
+        let public = match self.next(expected)? {
+            Spanned {
+                token: Token::Defn, ..
+            } => true,
+            Spanned {
+                token: Token::DefnPrivate,
+                ..
+            } => false,
+            Spanned { token, span } => return Err(unexpected(expected, Some(&token), &span)),
+        };
         let (name, _) = self.name("a function name")?;
         let params_open = self.expect(&Token::LBracket, "`[` and the parameters")?;
         let params = self.until(&Token::RBracket, &params_open, |parser| {
@@ -105,6 +114,7 @@ impl Parser {
         };
         Ok(Def {
             name,
+            public,
             params,
             body,
             span,
