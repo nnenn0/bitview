@@ -107,11 +107,7 @@ impl Program {
                 .call(id, vec![types::Ty::from(ctx)])
                 .map_err(|error| error.in_function(entry, None))?;
             if !result.is_html() {
-                return Err(Error::at(
-                    ErrorKind::Type,
-                    &function.span,
-                    format!("{entry} must return Html, but returns {result}"),
-                ));
+                return Err(Error::not_html(entry, &function.span, result));
             }
             reached.extend(self.functions.used_by(id));
         }
@@ -148,16 +144,8 @@ impl Program {
         let result = evaluator
             .call(id, &[ctx])
             .map_err(|error| error.in_function(entry, None))?;
-        eval::into_html([result]).map_err(|other| {
-            Error::at(
-                ErrorKind::Type,
-                &function.span,
-                format!(
-                    "{entry} must return Html, but returned a {}",
-                    other.type_name()
-                ),
-            )
-        })
+        eval::into_html([result])
+            .map_err(|other| Error::not_html(entry, &function.span, other.type_name()))
     }
 
     fn entry(&self, name: &str) -> Result<(FunctionId, &Function), Error> {
