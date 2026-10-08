@@ -10,7 +10,7 @@ pub(crate) struct Def {
 pub(crate) enum Syntax {
     Str(String),
     Name(String, Span),
-    List(Vec<Syntax>),
+    List(Vec<Syntax>, Span),
     Record(Vec<(String, Syntax, Span)>),
     Field(Box<Syntax>, String, Span),
     /// Only names can be called, so the callee is the name and its position.
@@ -30,7 +30,7 @@ pub(crate) struct Function {
 pub(crate) enum Expr {
     Str(String),
     Param(usize),
-    List(Vec<Expr>),
+    List(Vec<Expr>, Span),
     Record(Vec<(String, Expr)>),
     Field(Box<Expr>, String, Span),
     Call(Callee, Vec<Expr>, Span),

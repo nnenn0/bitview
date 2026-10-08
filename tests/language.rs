@@ -1,4 +1,4 @@
-use bitview::{Error as BitviewError, ErrorKind, Html, Program, Source, Value};
+use bitview::{Error as BitviewError, ErrorKind, Html, Program, Source, Type, Value};
 use std::error::Error;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -525,6 +525,174 @@ fn void_elements_take_no_child_arguments() -> Result<()> {
             ErrorKind::Html,
             "{text}"
         );
+        assert_eq!(
+            check_error(text, &Type::record::<&str>([]))?.kind(),
+            ErrorKind::Html,
+            "{text}"
+        );
     }
+    Ok(())
+}
+
+fn check_error(text: &str, ctx: &Type) -> Result<BitviewError> {
+    parse(text)?
+        .check("page", ctx)
+        .err()
+        .ok_or_else(|| format!("checked: {text}").into())
+}
+
+fn post_type() -> Type {
+    Type::record([
+        ("flag", Type::Bool),
+        ("title", Type::String),
+        ("items", Type::list(Type::record([("name", Type::String)]))),
+    ])
+}
+
+#[test]
+fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
+    let text = "fn page(ctx) =>\n  div(if ctx.flag then p(ctx.titel) else [], ul(map(ctx.items, item)))\nfn item(x) => li(x.name)";
+    let error = check_error(text, &post_type())?;
+    assert_eq!(
+        error.to_string(),
+        "t.bitview:2:30: unknown field \"titel\" (fields: flag, title, items)\n  in page"
+    );
+    // Rendering with this value takes the else branch and maps nothing, so it meets neither error.
+    let ctx = Value::record([
+        ("flag", Value::from(false)),
+        ("title", Value::from("T")),
+        ("items", Value::from(Vec::new())),
+    ]);
+    assert!(render(text, ctx).is_ok());
+    let text = "fn page(ctx) => ul(map(ctx.items, item))\nfn item(x) => li(x.nam)";
+    let error = check_error(text, &post_type())?;
+    assert_eq!(error.kind(), ErrorKind::Field);
+    assert_eq!(
+        error.trace().first().map(bitview::Frame::function),
+        Some("item")
+    );
+    Ok(())
+}
+
+#[test]
+fn if_and_lists_take_the_least_common_type() -> Result<()> {
+    for text in [
+        r#"fn page(ctx) => p(if ctx.flag then span("draft") else [])"#,
+        r#"fn page(ctx) => p(if ctx.flag then "text" else em("html"))"#,
+        r#"fn page(ctx) => p(["text", em("html"), map(ctx.items, item)])
+fn item(x) => li(x.name)"#,
+        r#"fn page(ctx) => p(map(pick(ctx), name))
+fn pick(ctx) => if ctx.flag then [{n: "a"}] else []
+fn name(x) => x.n"#,
+    ] {
+        let program = parse(text)?;
+        program.check("page", &post_type())?;
+    }
+    for (text, message) in [
+        (
+            r#"fn page(ctx) => p(if ctx.flag then ctx.flag else "no")"#,
+            "the two sides of if have different types: Bool and String",
+        ),
+        (
+            r#"fn page(ctx) => p(map([{a: "x"}, {b: "y"}], f))
+fn f(x) => x.a"#,
+            "the items of a list have different types: Record {a} and Record {b}",
+        ),
+    ] {
+        let error = check_error(text, &post_type())?;
+        assert_eq!(error.kind(), ErrorKind::Type, "{text}");
+        assert!(error.message().contains(message), "{text}: {error}");
+    }
+    Ok(())
+}
+
+#[test]
+fn check_finds_values_used_where_they_do_not_fit() -> Result<()> {
+    for (text, kind) in [
+        (
+            "fn page(ctx) => p(concat(\"a\", ctx.flag))",
+            ErrorKind::Type,
+        ),
+        (
+            "fn page(ctx) => a({href: ctx.flag}, \"x\")",
+            ErrorKind::Type,
+        ),
+        (
+            "fn page(ctx) => a({onclick: \"x\"}, \"x\")",
+            ErrorKind::Html,
+        ),
+        ("fn page(ctx) => p(ctx.flag)", ErrorKind::Type),
+        (
+            "fn page(ctx) => p(if ctx.title then \"a\" else \"b\")",
+            ErrorKind::Type,
+        ),
+        (
+            "fn page(ctx) => ul(map(ctx.title, f))\nfn f(x) => x",
+            ErrorKind::Type,
+        ),
+        ("fn page(ctx) => p(ctx.title.length)", ErrorKind::Type),
+        ("fn page(ctx) => ctx", ErrorKind::Type),
+        ("fn page(ctx) => ctx.flag", ErrorKind::Type),
+    ] {
+        let error = check_error(text, &post_type())?;
+        assert_eq!(error.kind(), kind, "{text}: {error}");
+        assert!(error.span().is_some(), "{text}: {error}");
+    }
+    assert!(
+        parse("fn page(ctx) => p(ctx.title)")?
+            .check("page", &post_type())
+            .is_ok()
+    );
+    assert_eq!(
+        parse("fn page(ctx) => p(\"x\")")?
+            .check("missing", &post_type())
+            .err()
+            .as_ref()
+            .map(BitviewError::kind),
+        Some(ErrorKind::Name)
+    );
+    Ok(())
+}
+
+#[test]
+fn values_validate_against_their_exact_type() -> Result<()> {
+    let ty = post_type();
+    let item = |name: Value| Value::record([("name", name)]);
+    let post = |items: Vec<Value>| {
+        Value::record([
+            ("flag", Value::from(true)),
+            ("title", Value::from("T")),
+            ("items", Value::from(items)),
+        ])
+    };
+    ty.validate(&post(vec![item(Value::from("a")), item(Value::from("b"))]))?;
+    ty.validate(&post(Vec::new()))?;
+    for (value, message) in [
+        (
+            post(vec![item(Value::from("a")), item(Value::from(true))]),
+            "value.items[1].name is a Bool, but the type is String",
+        ),
+        (
+            Value::record([("flag", Value::from(true)), ("title", Value::from("T"))]),
+            "value.items is missing",
+        ),
+        (
+            Value::record([
+                ("flag", Value::from(true)),
+                ("title", Value::from("T")),
+                ("items", Value::from(Vec::new())),
+                ("extra", Value::from("x")),
+            ]),
+            "value.extra is not a field of the type",
+        ),
+        (
+            Value::from("text"),
+            "value is a String, but the type is Record {flag, title, items}",
+        ),
+    ] {
+        let error = ty.validate(&value).err().ok_or("validated a wrong value")?;
+        assert_eq!(error.message(), message);
+    }
+    assert!(Type::Html.validate(&Value::from("text")).is_err());
     Ok(())
 }

@@ -88,7 +88,7 @@ impl Scope<'_> {
         Ok(match syntax {
             Syntax::Str(text) => Expr::Str(text),
             Syntax::Name(name, span) => self.name(&name, &span)?,
-            Syntax::List(items) => Expr::List(self.exprs(items)?),
+            Syntax::List(items, span) => Expr::List(self.exprs(items)?, span),
             Syntax::Record(fields) => {
                 let mut resolved: Vec<(String, Expr)> = Vec::with_capacity(fields.len());
                 for (key, value, span) in fields {
@@ -233,7 +233,7 @@ fn check_recursion(functions: &[Function]) -> Result<(), Error> {
 fn collect_calls(expr: &Expr, calls: &mut Vec<(usize, Span)>) {
     match expr {
         Expr::Str(_) | Expr::Param(_) => {}
-        Expr::List(items) => items.iter().for_each(|item| collect_calls(item, calls)),
+        Expr::List(items, _) => items.iter().for_each(|item| collect_calls(item, calls)),
         Expr::Record(fields) => fields
             .iter()
             .for_each(|(_, value)| collect_calls(value, calls)),

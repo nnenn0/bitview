@@ -22,6 +22,7 @@
 //! Evaluation has no input or output and always terminates: there is no recursion.
 
 mod ast;
+mod check;
 mod error;
 mod eval;
 mod html;
@@ -29,10 +30,12 @@ mod lexer;
 mod parser;
 mod resolve;
 mod serializer;
+mod types;
 mod value;
 
 pub use error::{Error, ErrorKind, Frame, Span};
 pub use html::Html;
+pub use types::Type;
 pub use value::Value;
 
 use ast::Function;
@@ -80,6 +83,31 @@ impl Program {
     #[must_use]
     pub fn defined_at(&self, name: &str) -> Option<&Span> {
         self.function(name).map(|(_, function)| &function.span)
+    }
+
+    /// Checks that `entry` renders every value of type `ctx` without a type or field error: every
+    /// field it may read exists, every value fits where it is used, and the result is Html. Both
+    /// sides of every `if` and the function of every `map` are checked, so an error that rendering
+    /// would meet only with some data is found here. Errors that depend on the values themselves,
+    /// such as a URL with a disallowed scheme, remain for rendering.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error, with its position and the functions that were being checked.
+    pub fn check(&self, entry: &str, ctx: &Type) -> Result<(), Error> {
+        let (index, function) = self.entry(entry)?;
+        let result = check::Checker::new(&self.functions)
+            .call(index, vec![types::Ty::from(ctx)])
+            .map_err(|error| error.in_function(entry, None))?;
+        if result.is_html() {
+            Ok(())
+        } else {
+            Err(Error::at(
+                ErrorKind::Type,
+                &function.span,
+                format!("{entry} must return Html, but returns {result}"),
+            ))
+        }
     }
 
     /// Calls the function `entry` with `ctx` and returns the HTML it builds.

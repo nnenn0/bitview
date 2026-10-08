@@ -181,11 +181,8 @@ impl Parser {
             Some(Token::Ident(name)) => Syntax::Name(name.clone(), span),
             Some(Token::LBracket) => {
                 self.advance();
-                return Ok(Syntax::List(self.separated(
-                    &Token::RBracket,
-                    "`,` or `]`",
-                    Self::expr,
-                )?));
+                let items = self.separated(&Token::RBracket, "`,` or `]`", Self::expr)?;
+                return Ok(Syntax::List(items, span));
             }
             Some(Token::LBrace) => {
                 self.advance();

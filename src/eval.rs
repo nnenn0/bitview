@@ -32,7 +32,7 @@ impl Evaluator<'_> {
         match expr {
             Expr::Str(text) => Ok(Value::String(text.clone())),
             Expr::Param(_) | Expr::Field(..) => self.read(expr, args),
-            Expr::List(items) => self.eval_all(items, args).map(Value::List),
+            Expr::List(items, _) => self.eval_all(items, args).map(Value::List),
             Expr::Record(fields) => fields
                 .iter()
                 .map(|(key, value)| Ok((key.clone(), self.eval(value, args)?)))
