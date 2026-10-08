@@ -30,8 +30,8 @@
   ],
   "repository": {
     "comment": {
-      "name": "comment.line.double-dash.bitview",
-      "match": "--.*$"
+      "name": "comment.line.semicolon.bitview",
+      "match": ";.*$"
     },
     "string": {
       "name": "string.quoted.double.bitview",
@@ -59,18 +59,21 @@
       ]
     },
     "definition": {
-      "match": "(?<![a-z0-9.-])(fn)\\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\\s*(\\()([^)]*)",
+      "match": "(\\()\\s*(defn)\\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\\s*(\\[)([^\\]]*)",
       "captures": {
         "1": {
-          "name": "keyword.declaration.function.bitview"
+          "name": "punctuation.section.parens.bitview"
         },
         "2": {
-          "name": "entity.name.function.bitview"
+          "name": "keyword.declaration.function.bitview"
         },
         "3": {
-          "name": "punctuation.section.parameters.begin.bitview"
+          "name": "entity.name.function.bitview"
         },
         "4": {
+          "name": "punctuation.section.parameters.begin.bitview"
+        },
+        "5": {
           "patterns": [
             {
               "name": "variable.parameter.bitview",
@@ -83,30 +86,29 @@
     "keyword": {
       "patterns": [
         {
-          "name": "keyword.control.conditional.bitview",
-          "match": "(?<![a-z0-9.-])(?:if|then|else)(?![a-z0-9-])"
-        },
-        {
-          "name": "keyword.declaration.function.bitview",
-          "match": "(?<![a-z0-9.-])fn(?![a-z0-9-])"
-        },
-        {
-          "name": "keyword.operator.arrow.bitview",
-          "match": "=>"
+          "match": "(\\()\\s*(if)(?![a-z0-9.-])",
+          "captures": {
+            "1": {
+              "name": "punctuation.section.parens.bitview"
+            },
+            "2": {
+              "name": "keyword.control.conditional.bitview"
+            }
+          }
         }
       ]
     },
     "call": {
       "patterns": [
         {
-          "comment": "map(list, function): the function is named, not called.",
-          "match": "(?<![a-z0-9.-])(map)\\s*(\\()([^,()]*)(,)\\s*([a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?=\\s*\\))",
+          "comment": "(map list function): the function is named, not called.",
+          "match": "(\\()\\s*(map)\\s+([a-z][a-z0-9.-]*)\\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?=\\s*\\))",
           "captures": {
             "1": {
-              "name": "support.function.builtin.bitview"
+              "name": "punctuation.section.parens.bitview"
             },
             "2": {
-              "name": "punctuation.section.parens.bitview"
+              "name": "support.function.builtin.bitview"
             },
             "3": {
               "patterns": [
@@ -116,33 +118,39 @@
               ]
             },
             "4": {
-              "name": "punctuation.separator.comma.bitview"
-            },
-            "5": {
               "name": "entity.name.function.call.bitview"
             }
           }
         },
         {
-          "match": "(?<![a-z0-9.-])(html|head|body|title|meta|link|header|footer|main|nav|section|article|aside|h1|h2|h3|h4|h5|h6|p|div|ul|ol|li|dl|dt|dd|blockquote|pre|hr|a|span|time|strong|em|code|br|img|table|thead|tbody|tr|th|td)(?=\\s*\\()",
+          "match": "(\\()\\s*(html|head|body|title|meta|link|header|footer|main|nav|section|article|aside|h1|h2|h3|h4|h5|h6|p|div|ul|ol|li|dl|dt|dd|blockquote|pre|hr|a|span|time|strong|em|code|br|img|table|thead|tbody|tr|th|td)(?![a-z0-9.-])",
           "captures": {
             "1": {
+              "name": "punctuation.section.parens.bitview"
+            },
+            "2": {
               "name": "entity.name.tag.bitview"
             }
           }
         },
         {
-          "match": "(?<![a-z0-9.-])(map|concat)(?=\\s*\\()",
+          "match": "(\\()\\s*(map|concat)(?![a-z0-9.-])",
           "captures": {
             "1": {
+              "name": "punctuation.section.parens.bitview"
+            },
+            "2": {
               "name": "support.function.builtin.bitview"
             }
           }
         },
         {
-          "match": "(?<![a-z0-9.-])([a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?=\\s*\\()",
+          "match": "(\\()\\s*([a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?![a-z0-9.-])",
           "captures": {
             "1": {
+              "name": "punctuation.section.parens.bitview"
+            },
+            "2": {
               "name": "entity.name.function.call.bitview"
             }
           }
@@ -150,13 +158,13 @@
       ]
     },
     "key": {
-      "match": "(?<![a-z0-9.-])([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\\s*(:)",
+      "match": "(:)([a-z][a-z0-9]*(?:-[a-z0-9]+)*)",
       "captures": {
         "1": {
-          "name": "entity.other.attribute-name.bitview"
+          "name": "punctuation.definition.keyword.bitview"
         },
         "2": {
-          "name": "punctuation.separator.key-value.bitview"
+          "name": "entity.other.attribute-name.bitview"
         }
       }
     },
@@ -173,10 +181,6 @@
     },
     "punctuation": {
       "patterns": [
-        {
-          "name": "punctuation.separator.comma.bitview",
-          "match": ","
-        },
         {
           "name": "punctuation.section.brackets.bitview",
           "match": "[\\[\\]]"

@@ -8,7 +8,7 @@
 //!
 //! let program = Program::parse(&[Source {
 //!     name: "page.bv",
-//!     text: r#"fn page(ctx) => html(body(h1(ctx.title), ctx.content))"#,
+//!     text: r#"(defn page [ctx] (html (body (h1 ctx.title) ctx.content)))"#,
 //! }])?;
 //! let ctx = Value::record([
 //!     ("title", Value::from("<Hello>")),

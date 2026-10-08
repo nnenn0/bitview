@@ -3,43 +3,37 @@ use std::{fmt, iter::Peekable, str::Chars, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Token {
-    Ident(String),
+    Name(String),
+    /// A field read, written right after a name or another field, as `.title` in `ctx.title`.
+    Field(String),
+    /// A record key, as `:lang` in `{:lang "ja"}`.
+    Key(String),
     Str(String),
-    Fn,
+    Defn,
     If,
-    Then,
-    Else,
     LParen,
     RParen,
     LBracket,
     RBracket,
     LBrace,
     RBrace,
-    Comma,
-    Colon,
-    Dot,
-    Arrow,
 }
 
 impl fmt::Display for Token {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let symbol = match self {
-            Self::Ident(name) => return write!(formatter, "`{name}`"),
+            Self::Name(name) => return write!(formatter, "`{name}`"),
+            Self::Field(name) => return write!(formatter, "`.{name}`"),
+            Self::Key(name) => return write!(formatter, "`:{name}`"),
             Self::Str(_) => return formatter.write_str("a string"),
-            Self::Fn => "fn",
+            Self::Defn => "defn",
             Self::If => "if",
-            Self::Then => "then",
-            Self::Else => "else",
             Self::LParen => "(",
             Self::RParen => ")",
             Self::LBracket => "[",
             Self::RBracket => "]",
             Self::LBrace => "{",
             Self::RBrace => "}",
-            Self::Comma => ",",
-            Self::Colon => ":",
-            Self::Dot => ".",
-            Self::Arrow => "=>",
         };
         write!(formatter, "`{symbol}`")
     }
@@ -78,12 +72,33 @@ pub(crate) fn tokenize(source: &Arc<str>, text: &str) -> Result<Tokens, Error> {
             ']' => Token::RBracket,
             '{' => Token::LBrace,
             '}' => Token::RBrace,
-            ',' => Token::Comma,
-            ':' => Token::Colon,
-            '.' => Token::Dot,
-            '=' if lexer.eat('>') => Token::Arrow,
             '"' => Token::Str(lexer.string(&span)?),
-            'a'..='z' => keyword_or_ident(lexer.ident(character, &span)?),
+            ':' => {
+                let key_span = lexer.span();
+                match lexer.bump() {
+                    Some(first @ 'a'..='z') => Token::Key(lexer.ident(first, &key_span)?),
+                    _ => {
+                        return Err(Error::at(
+                            ErrorKind::Syntax,
+                            &span,
+                            "a record key is a name after `:`, as in :lang",
+                        ));
+                    }
+                }
+            }
+            'a'..='z' => {
+                let token = keyword_or_name(lexer.ident(character, &span)?);
+                if !matches!(token, Token::Name(_)) && lexer.chars.peek() == Some(&'.') {
+                    return Err(Error::at(
+                        ErrorKind::Syntax,
+                        &span,
+                        format!("{token} is a keyword and has no fields"),
+                    ));
+                }
+                list.push(Spanned { token, span });
+                lexer.fields(&mut list)?;
+                continue;
+            }
             'A'..='Z' | '_' => return Err(Error::at(ErrorKind::Syntax, &span, NAME_RULE)),
             other => {
                 return Err(Error::at(
@@ -101,13 +116,11 @@ pub(crate) fn tokenize(source: &Arc<str>, text: &str) -> Result<Tokens, Error> {
 const NAME_RULE: &str =
     "names are lowercase letters and digits, with words joined by single hyphens, as in entry-list";
 
-fn keyword_or_ident(name: String) -> Token {
+fn keyword_or_name(name: String) -> Token {
     match name.as_str() {
-        "fn" => Token::Fn,
+        "defn" => Token::Defn,
         "if" => Token::If,
-        "then" => Token::Then,
-        "else" => Token::Else,
-        _ => Token::Ident(name),
+        _ => Token::Name(name),
     }
 }
 
@@ -142,14 +155,13 @@ impl Lexer<'_> {
         found
     }
 
-    /// Names cannot contain `--`, so a comment never starts inside a name.
     fn skip_trivia(&mut self) {
         loop {
             match self.chars.peek().copied() {
                 Some(' ' | '\t' | '\n' | '\r') => {
                     self.bump();
                 }
-                Some('-') if self.chars.clone().nth(1) == Some('-') => {
+                Some(';') => {
                     while self
                         .chars
                         .peek()
@@ -161,6 +173,23 @@ impl Lexer<'_> {
                 _ => return,
             }
         }
+    }
+
+    /// Reads the fields after a name, each a `.` followed by a name with no space between.
+    fn fields(&mut self, list: &mut Vec<Spanned>) -> Result<(), Error> {
+        while self.eat('.') {
+            let span = self.span();
+            let Some(first @ 'a'..='z') = self.bump() else {
+                return Err(Error::at(
+                    ErrorKind::Syntax,
+                    &span,
+                    "expected a field name after `.`",
+                ));
+            };
+            let token = Token::Field(self.ident(first, &span)?);
+            list.push(Spanned { token, span });
+        }
+        Ok(())
     }
 
     fn ident(&mut self, first: char, start: &Span) -> Result<String, Error> {

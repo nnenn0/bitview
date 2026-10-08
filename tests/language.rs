@@ -37,7 +37,7 @@ fn strings_are_escaped_and_html_is_inserted_as_built() -> Result<()> {
         ),
     ]);
     assert_eq!(
-        render("fn page(ctx) => p(ctx.text, ctx.content)", ctx)?,
+        render("(defn page [ctx] (p ctx.text ctx.content))", ctx)?,
         "<p>&lt;script&gt;alert(&#39;&amp;&#39;)&lt;/script&gt;<em>&lt;b&gt;</em></p>"
     );
     Ok(())
@@ -47,14 +47,14 @@ fn strings_are_escaped_and_html_is_inserted_as_built() -> Result<()> {
 fn attributes_are_escaped_in_order() -> Result<()> {
     assert_eq!(
         render(
-            r#"fn page(ctx) => a({title: "\"><x", href: "/a?b=1&c=2", class: "x"}, "t")"#,
+            r#"(defn page [ctx] (a {:title "\"><x" :href "/a?b=1&c=2" :class "x"} "t"))"#,
             empty()
         )?,
         "<a title=\"&quot;&gt;&lt;x\" href=\"/a?b=1&amp;c=2\" class=\"x\">t</a>"
     );
     assert_eq!(
         render(
-            r#"fn page(ctx) => span({aria-label: "x", "data-id": "y"})"#,
+            r#"(defn page [ctx] (span {:aria-label "x" :data-id "y"}))"#,
             empty()
         )?,
         "<span aria-label=\"x\" data-id=\"y\"></span>"
@@ -65,22 +65,22 @@ fn attributes_are_escaped_in_order() -> Result<()> {
 #[test]
 fn templates_cannot_write_scripts_styles_or_unsafe_urls() -> Result<()> {
     for text in [
-        r#"fn page(ctx) => a({onclick: "x"}, "t")"#,
-        r#"fn page(ctx) => p({style: "color: red"}, "t")"#,
-        r#"fn page(ctx) => a({href: "javascript:alert(1)"}, "t")"#,
-        r#"fn page(ctx) => a({href: " JAVA\tSCRIPT:alert(1)"}, "t")"#,
-        r#"fn page(ctx) => img({src: "data:image/png;base64,AAAA"})"#,
+        r#"(defn page [ctx] (a {:onclick "x"} "t"))"#,
+        r#"(defn page [ctx] (p {:style "color: red"} "t"))"#,
+        r#"(defn page [ctx] (a {:href "javascript:alert(1)"} "t"))"#,
+        r#"(defn page [ctx] (a {:href " JAVA\tSCRIPT:alert(1)"} "t"))"#,
+        r#"(defn page [ctx] (img {:src "data:image/png;base64,AAAA"}))"#,
     ] {
         let error = render_error(text, empty())?;
         assert_eq!(error.kind(), ErrorKind::Html, "{text}: {error}");
         assert_eq!(error.span().map(bitview::Span::line), Some(1), "{error}");
     }
     let ctx = Value::record([("url", Value::from("javascript:alert(1)"))]);
-    assert!(render_error(r#"fn page(ctx) => a({href: ctx.url}, "t")"#, ctx).is_ok());
+    assert!(render_error(r#"(defn page [ctx] (a {:href ctx.url} "t"))"#, ctx).is_ok());
     for text in [
-        r#"fn page(ctx) => script("x")"#,
-        r#"fn page(ctx) => style("x")"#,
-        r#"fn page(ctx) => raw("<b>")"#,
+        r#"(defn page [ctx] (script "x"))"#,
+        r#"(defn page [ctx] (style "x"))"#,
+        r#"(defn page [ctx] (raw "<b>"))"#,
     ] {
         assert_eq!(parse_error(text)?.kind(), ErrorKind::Name, "{text}");
     }
@@ -90,10 +90,10 @@ fn templates_cannot_write_scripts_styles_or_unsafe_urls() -> Result<()> {
 #[test]
 fn void_elements_have_no_children_or_end_tag() -> Result<()> {
     assert_eq!(
-        render(r#"fn page(ctx) => p("a", br(), "b")"#, empty())?,
+        render(r#"(defn page [ctx] (p "a" (br) "b"))"#, empty())?,
         "<p>a<br>b</p>"
     );
-    let error = render_error(r#"fn page(ctx) => img({src: "/a.png"}, "x")"#, empty())?;
+    let error = render_error(r#"(defn page [ctx] (img {:src "/a.png"} "x"))"#, empty())?;
     assert_eq!(error.kind(), ErrorKind::Html);
     Ok(())
 }
@@ -101,22 +101,22 @@ fn void_elements_have_no_children_or_end_tag() -> Result<()> {
 #[test]
 fn children_flatten_lists_and_reject_other_values() -> Result<()> {
     assert_eq!(
-        render(r#"fn page(ctx) => p(["a", ["b", []], "c"])"#, empty())?,
+        render(r#"(defn page [ctx] (p ["a" ["b" []] "c"]))"#, empty())?,
         "<p>abc</p>"
     );
     let ctx = Value::record([("flag", Value::from(true))]);
     assert_eq!(
-        render_error("fn page(ctx) => p(ctx.flag)", ctx)?.kind(),
+        render_error("(defn page [ctx] (p ctx.flag))", ctx)?.kind(),
         ErrorKind::Type
     );
-    let error = render_error(r#"fn page(ctx) => p("a", {class: "x"})"#, empty())?;
+    let error = render_error(r#"(defn page [ctx] (p "a" {:class "x"}))"#, empty())?;
     assert!(error.message().contains("first argument"), "{error}");
     Ok(())
 }
 
 #[test]
 fn if_needs_a_bool_and_else_can_render_nothing() -> Result<()> {
-    let text = r#"fn page(ctx) => p(if ctx.draft then span("draft") else [])"#;
+    let text = r#"(defn page [ctx] (p (if ctx.draft (span "draft") [])))"#;
     let with = |draft: Value| Value::record([("draft", draft)]);
     assert_eq!(
         render(text, with(Value::from(true)))?,
@@ -131,7 +131,7 @@ fn if_needs_a_bool_and_else_can_render_nothing() -> Result<()> {
 
 #[test]
 fn map_applies_a_named_function() -> Result<()> {
-    let text = "fn page(ctx) => ul(map(ctx.items, item))\nfn item(x) => li(x.name)";
+    let text = "(defn page [ctx] (ul (map ctx.items item)))\n(defn item [x] (li x.name))";
     let items = |names: &[&str]| {
         Value::record([(
             "items",
@@ -148,7 +148,7 @@ fn map_applies_a_named_function() -> Result<()> {
         "<ul><li>a</li><li>b</li></ul>"
     );
     assert_eq!(render(text, items(&[]))?, "<ul></ul>");
-    let nested = "fn page(ctx) => div(map(ctx.rows, row))\nfn row(r) => p(map(r.cells, cell))\nfn cell(c) => span(c)";
+    let nested = "(defn page [ctx] (div (map ctx.rows row)))\n(defn row [r] (p (map r.cells cell)))\n(defn cell [c] (span c))";
     let row = |cells: &[&str]| {
         Value::record([(
             "cells",
@@ -166,11 +166,11 @@ fn map_applies_a_named_function() -> Result<()> {
         "<div><p><span>a</span><span>b</span></p><p><span>c</span></p></div>"
     );
     for text in [
-        "fn page(ctx) => ul(map(ctx.items, p))",
-        "fn page(ctx) => ul(map(ctx.items, missing))",
-        "fn page(ctx) => ul(map(ctx.items))",
-        "fn page(ctx) => ul(map(ctx.items, two))\nfn two(x, y) => x",
-        "fn page(ctx) => ul(map(ctx.items, ctx))",
+        "(defn page [ctx] (ul (map ctx.items p)))",
+        "(defn page [ctx] (ul (map ctx.items missing)))",
+        "(defn page [ctx] (ul (map ctx.items)))",
+        "(defn page [ctx] (ul (map ctx.items two)))\n(defn two [x y] x)",
+        "(defn page [ctx] (ul (map ctx.items ctx)))",
     ] {
         assert!(parse(text).is_err(), "{text}");
     }
@@ -186,18 +186,18 @@ fn concat_joins_strings_only() -> Result<()> {
     let ctx = Value::record([("title", Value::from("A & B"))]);
     assert_eq!(
         render(
-            r#"fn page(ctx) => title(concat(ctx.title, " | ", "Site"))"#,
+            r#"(defn page [ctx] (title (concat ctx.title " | " "Site")))"#,
             ctx
         )?,
         "<title>A &amp; B | Site</title>"
     );
     let ctx = Value::record([("flag", Value::from(true))]);
     assert_eq!(
-        render_error(r#"fn page(ctx) => p(concat("a", ctx.flag))"#, ctx)?.kind(),
+        render_error(r#"(defn page [ctx] (p (concat "a" ctx.flag)))"#, ctx)?.kind(),
         ErrorKind::Type
     );
     assert_eq!(
-        parse_error("fn page(ctx) => p(concat())")?.kind(),
+        parse_error("(defn page [ctx] (p (concat)))")?.kind(),
         ErrorKind::Arity
     );
     Ok(())
@@ -205,10 +205,8 @@ fn concat_joins_strings_only() -> Result<()> {
 
 #[test]
 fn layouts_are_functions_that_take_the_parts_of_a_page() -> Result<()> {
-    let text = r#"
-        fn layout(page-title, content) => html(head(title(page-title)), body(content))
-        fn page(ctx) => layout(concat("Post | ", ctx.site), [h1("Post"), p("Body")])
-    "#;
+    let text = r#"(defn layout [page-title content] (html (head (title page-title)) (body content)))
+(defn page [ctx] (layout (concat "Post | " ctx.site) [(h1 "Post") (p "Body")]))"#;
     let page = parse(text)?
         .render("page", Value::record([("site", Value::from("Blog"))]))?
         .to_document()?;
@@ -226,36 +224,43 @@ fn records_and_fields() -> Result<()> {
         Value::record([("meta", Value::record([("title", Value::from("T"))]))]),
     )]);
     assert_eq!(
-        render("fn page(ctx) => p(ctx.post.meta.title)", ctx.clone())?,
+        render("(defn page [ctx] (p ctx.post.meta.title))", ctx.clone())?,
         "<p>T</p>"
     );
     assert_eq!(
         render(
-            "fn page(ctx) => p(pick({a: \"x\", b: ctx.post.meta.title}))\nfn pick(r) => r.b",
+            "(defn page [ctx] (p (pick {:a \"x\" :b ctx.post.meta.title})))\n(defn pick [r] r.b)",
             ctx.clone()
         )?,
         "<p>T</p>"
     );
+    // Only a name has fields; a record a function returns is read through a parameter.
+    let wrapped = "(defn wrap [x] {:inner x})\n(defn page [ctx] (p (title-of (wrap ctx.post))))";
     assert_eq!(
         render(
-            "fn page(ctx) => p(wrap(ctx.post).inner.meta.title)\nfn wrap(x) => {inner: x}",
+            &format!("{wrapped}\n(defn title-of [w] w.inner.meta.title)"),
             ctx.clone()
         )?,
         "<p>T</p>"
     );
     let error = render_error(
-        "fn page(ctx) => p(wrap(ctx.post).inner.titel)\nfn wrap(x) => {inner: x}",
+        &format!("{wrapped}\n(defn title-of [w] w.inner.titel)"),
         ctx.clone(),
     )?;
     assert_eq!(error.kind(), ErrorKind::Field);
-    assert_eq!(error.span().map(bitview::Span::column), Some(40));
-    let error = render_error("fn page(ctx) => p(ctx.post.titel)", ctx.clone())?;
+    assert_eq!(error.span().map(bitview::Span::column), Some(28));
+    assert_eq!(
+        parse_error(&format!("{wrapped}\n(defn title-of [w] (wrap w).inner)"))?.kind(),
+        ErrorKind::Syntax
+    );
+    let error = render_error("(defn page [ctx] (p ctx.post.titel))", ctx.clone())?;
     assert_eq!(error.kind(), ErrorKind::Field);
     assert!(error.message().contains("(fields: meta)"), "{error}");
-    let error = render_error("fn page(ctx) => p(ctx.post.meta.title.x)", ctx)?;
+    let error = render_error("(defn page [ctx] (p ctx.post.meta.title.x))", ctx)?;
     assert_eq!(error.kind(), ErrorKind::Type);
     assert_eq!(
-        parse_error("fn page(ctx) => p({a: \"x\", a: \"y\"}.a)")?.kind(),
+        parse_error("(defn page [ctx] (p (pick {:a \"x\" :a \"y\"})))\n(defn pick [r] r.a)")?
+            .kind(),
         ErrorKind::Name
     );
     Ok(())
@@ -263,57 +268,65 @@ fn records_and_fields() -> Result<()> {
 
 #[test]
 fn errors_point_to_the_source_and_the_running_functions() -> Result<()> {
-    let text =
-        "fn page(ctx) =>\n  div(meta-line(ctx.post))\n\nfn meta-line(post) =>\n  p(post.titel)";
+    let text = "(defn page [ctx]\n  (div (meta-line ctx.post)))\n\n(defn meta-line [post]\n  (p post.titel))";
     let ctx = Value::record([("post", Value::record([("title", Value::from("T"))]))]);
     let error = render_error(text, ctx)?;
     assert_eq!(
         error.to_string(),
-        "t.bv:5:10: unknown field \"titel\" (fields: title)\n  in meta-line (called at t.bv:2:7)\n  in page"
+        "t.bv:5:11: unknown field \"titel\" (fields: title)\n  in meta-line (called at t.bv:2:9)\n  in page"
     );
-    let error = parse_error("fn page(ctx) =>\n  p(\"a\" \"b\")")?;
-    assert_eq!(
-        error.to_string(),
-        "t.bv:2:9: expected `,` or `)`, found a string"
-    );
+    // A bracket left open is reported where it opens, not at the end of the file.
+    let error = parse_error("(defn page [ctx]\n  (div\n    (p \"a\")\n")?;
+    assert_eq!(error.to_string(), "t.bv:2:3: no `)` closes this bracket");
     Ok(())
 }
 
 #[test]
 fn names_are_checked_before_rendering() -> Result<()> {
     for (text, kind) in [
-        ("fn page(ctx) => p(missing)", ErrorKind::Name),
-        ("fn page(ctx) => missing(ctx)", ErrorKind::Name),
+        ("(defn page [ctx] (p missing))", ErrorKind::Name),
+        ("(defn page [ctx] (missing ctx))", ErrorKind::Name),
         (
-            "fn page(ctx) => p(helper)\nfn helper(x) => x",
+            "(defn page [ctx] (p helper))\n(defn helper [x] x)",
             ErrorKind::Name,
         ),
-        ("fn page(ctx) => ctx(1)", ErrorKind::Syntax),
-        ("fn page(ctx) => ctx()", ErrorKind::Name),
+        ("(defn page [ctx] (ctx 1))", ErrorKind::Syntax),
+        ("(defn page [ctx] (ctx))", ErrorKind::Name),
         (
-            "fn page(ctx) => p(helper(ctx))\nfn helper(ctx) => ctx\nfn page(x) => x",
+            "(defn page [ctx] (p (helper ctx)))\n(defn helper [ctx] ctx)\n(defn page [x] x)",
             ErrorKind::Name,
         ),
         (
-            "fn page(ctx) => p(helper(ctx, ctx))\nfn helper(x) => x",
+            "(defn page [ctx] (p (helper ctx ctx)))\n(defn helper [x] x)",
             ErrorKind::Arity,
         ),
-        ("fn p(ctx) => ctx", ErrorKind::Name),
-        ("fn page(x, x) => x", ErrorKind::Name),
-        ("fn page(ctx) => P(ctx)", ErrorKind::Syntax),
-        ("fn page(ctx) => p(1)", ErrorKind::Syntax),
-        ("fn page(ctx) => p(\"a)", ErrorKind::Syntax),
-        ("fn page(ctx) => p(\"\\q\")", ErrorKind::Syntax),
-        ("fn page(ctx) => p(\"\\u{110000}\")", ErrorKind::Syntax),
-        ("fn page(ctx) =>", ErrorKind::Syntax),
+        ("(defn p [ctx] ctx)", ErrorKind::Name),
+        ("(defn page [x x] x)", ErrorKind::Name),
+        ("(defn page [ctx] (P ctx))", ErrorKind::Syntax),
+        ("(defn page [ctx] (p 1))", ErrorKind::Syntax),
+        ("(defn page [ctx] (p \"a))", ErrorKind::Syntax),
+        ("(defn page [ctx] (p \"\\q\"))", ErrorKind::Syntax),
+        ("(defn page [ctx] (p \"\\u{110000}\"))", ErrorKind::Syntax),
+        ("(defn page [ctx])", ErrorKind::Syntax),
+        ("(defn page [ctx] ctx ctx)", ErrorKind::Syntax),
+        ("(page ctx)", ErrorKind::Syntax),
         ("page(ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx] ())", ErrorKind::Syntax),
+        ("(defn page [ctx] (ctx.title))", ErrorKind::Syntax),
+        ("(defn page [ctx] ctx .title)", ErrorKind::Syntax),
+        ("(defn page [ctx] (p :id))", ErrorKind::Syntax),
+        ("(defn page [ctx] (p {id \"x\"}))", ErrorKind::Syntax),
+        ("(defn page [ctx] (p {:id}))", ErrorKind::Syntax),
+        ("(defn page [ctx] (if ctx.flag \"x\"))", ErrorKind::Syntax),
+        ("(defn if [ctx] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx] (p if.x))", ErrorKind::Syntax),
     ] {
         let error = parse_error(text)?;
         assert_eq!(error.kind(), kind, "{text}: {error}");
         assert!(error.span().is_some(), "{text}: {error}");
     }
     assert_eq!(
-        render(r#"fn page(ctx) => p("\u{1F600}\n\t\"\\")"#, empty())?,
+        render(r#"(defn page [ctx] (p "\u{1F600}\n\t\"\\"))"#, empty())?,
         "<p>\u{1F600}\n\t&quot;\\</p>"
     );
     Ok(())
@@ -321,34 +334,33 @@ fn names_are_checked_before_rendering() -> Result<()> {
 
 #[test]
 fn names_are_lowercase_words_joined_by_hyphens() -> Result<()> {
-    let text =
-        "fn page(ctx) => entry-list(ctx.created-at)\nfn entry-list(created-at) => p(created-at)";
+    let text = "(defn page [ctx] (entry-list ctx.created-at))\n(defn entry-list [created-at] (p created-at))";
     let ctx = Value::record([("created-at", Value::from("today"))]);
     assert_eq!(render(text, ctx)?, "<p>today</p>");
     for text in [
-        "fn page(ctx) => entry_list(ctx)",
-        "fn page(ctx) => p(ctx.created_at)",
-        "fn page(ctx) => entry-(ctx)",
-        "fn page(ctx) => entry--list(ctx)",
-        "fn page(ctx) => -entry(ctx)",
+        "(defn page [ctx] (entry_list ctx))",
+        "(defn page [ctx] (p ctx.created_at))",
+        "(defn page [ctx] (entry- ctx))",
+        "(defn page [ctx] (entry--list ctx))",
+        "(defn page [ctx] (-entry ctx))",
     ] {
         let error = parse_error(text)?;
         assert_eq!(error.kind(), ErrorKind::Syntax, "{text}: {error}");
     }
-    let error = parse_error("fn page(ctx) => entry_list(ctx)")?;
+    let error = parse_error("(defn page [ctx] (entry_list ctx))")?;
     assert!(error.message().contains("entry-list"), "{error}");
-    assert_eq!(error.span().map(bitview::Span::column), Some(17));
+    assert_eq!(error.span().map(bitview::Span::column), Some(19));
     Ok(())
 }
 
 #[test]
 fn parameters_hide_functions_of_the_same_name() -> Result<()> {
-    let text = "fn page(ctx) => heading(ctx.title)\nfn heading(title) => h1(title)";
+    let text = "(defn page [ctx] (heading ctx.title))\n(defn heading [title] (h1 title))";
     let ctx = Value::record([("title", Value::from("T"))]);
     assert_eq!(render(text, ctx)?, "<h1>T</h1>");
     for text in [
-        "fn page(title) => html(head(title(title)))",
-        "fn page(item) => ul(map(item, item))\nfn item(x) => li(x)",
+        "(defn page [title] (html (head (title title))))",
+        "(defn page [item] (ul (map item item)))\n(defn item [x] (li x))",
     ] {
         let error = parse_error(text)?;
         assert_eq!(error.kind(), ErrorKind::Name, "{text}");
@@ -361,10 +373,14 @@ fn parameters_hide_functions_of_the_same_name() -> Result<()> {
 }
 
 #[test]
-fn comments_run_from_two_hyphens_to_the_end_of_the_line() -> Result<()> {
-    let text = "-- A page.\nfn page(ctx) => -- the body\n  p(\"-- not a comment\") --";
-    assert_eq!(render(text, empty())?, "<p>-- not a comment</p>");
-    for text in ["fn page(ctx) => p(ctx.title--)", "fn page(ctx) => - p(ctx)"] {
+fn comments_run_from_a_semicolon_to_the_end_of_the_line() -> Result<()> {
+    let text = "; A page.\n(defn page [ctx] ; the body\n  (p \"; not a comment\")) ;";
+    assert_eq!(render(text, empty())?, "<p>; not a comment</p>");
+    for text in [
+        "(defn page [ctx] (p ctx.title--))",
+        "(defn page [ctx] - (p ctx))",
+        "-- A page.\n(defn page [ctx] ctx)",
+    ] {
         assert_eq!(parse_error(text)?.kind(), ErrorKind::Syntax, "{text}");
     }
     Ok(())
@@ -373,14 +389,14 @@ fn comments_run_from_two_hyphens_to_the_end_of_the_line() -> Result<()> {
 #[test]
 fn recursion_is_rejected_before_rendering() -> Result<()> {
     for text in [
-        "fn page(ctx) => page(ctx)",
-        "fn page(ctx) => f(ctx)\nfn f(x) => g(x)\nfn g(x) => f(x)",
-        "fn page(ctx) => ul(map(ctx, item))\nfn item(x) => ul(map(x, item))",
+        "(defn page [ctx] (page ctx))",
+        "(defn page [ctx] (f ctx))\n(defn f [x] (g x))\n(defn g [x] (f x))",
+        "(defn page [ctx] (ul (map ctx item)))\n(defn item [x] (ul (map x item)))",
     ] {
         let error = parse_error(text)?;
         assert_eq!(error.kind(), ErrorKind::Recursion, "{text}");
     }
-    let error = parse_error("fn page(ctx) => f(ctx)\nfn f(x) => g(x)\nfn g(x) => f(x)")?;
+    let error = parse_error("(defn page [ctx] (f ctx))\n(defn f [x] (g x))\n(defn g [x] (f x))")?;
     assert!(error.message().ends_with("f -> g -> f"), "{error}");
     Ok(())
 }
@@ -388,9 +404,9 @@ fn recursion_is_rejected_before_rendering() -> Result<()> {
 #[test]
 fn deep_nesting_fails_without_exhausting_the_stack() -> Result<()> {
     let depth = 10_000;
-    for (open, close) in [("p(", ")"), ("[", "]"), ("(", ")")] {
+    for (open, close) in [("(p ", ")"), ("[", "]"), ("{:a ", "}")] {
         let text = format!(
-            "fn page(ctx) => {}ctx{}",
+            "(defn page [ctx] {}ctx{})",
             open.repeat(depth),
             close.repeat(depth)
         );
@@ -398,12 +414,12 @@ fn deep_nesting_fails_without_exhausting_the_stack() -> Result<()> {
         assert_eq!(error.kind(), ErrorKind::Syntax);
         assert!(error.message().contains("nested"), "{error}");
     }
-    let error = parse_error(&format!("fn page(ctx) => ctx{}", ".a".repeat(depth)))?;
+    let error = parse_error(&format!("(defn page [ctx] ctx{})", ".a".repeat(depth)))?;
     assert_eq!(error.kind(), ErrorKind::Syntax);
     assert!(error.message().contains("nested"), "{error}");
     let text = format!(
-        "fn page(ctx) => {}\"x\"{}",
-        "div(".repeat(100),
+        "(defn page [ctx] {}\"x\"{})",
+        "(div ".repeat(100),
         ")".repeat(100)
     );
     assert!(render(&text, empty())?.starts_with("<div><div>"));
@@ -412,7 +428,7 @@ fn deep_nesting_fails_without_exhausting_the_stack() -> Result<()> {
 
 #[test]
 fn entry_functions_take_one_value_and_return_html() -> Result<()> {
-    let program = parse("fn page(ctx) => {a: \"text\"}\nfn two(x, y) => x")?;
+    let program = parse("(defn page [ctx] {:a \"text\"})\n(defn two [x y] x)")?;
     assert_eq!(
         program
             .render("page", empty())
@@ -446,11 +462,11 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
     let program = Program::parse(&[
         Source {
             name: "a.bv",
-            text: "fn page(ctx) => p(helper(ctx))",
+            text: "(defn page [ctx] (p (helper ctx)))",
         },
         Source {
             name: "b.bv",
-            text: "fn helper(x) => x.name",
+            text: "(defn helper [x] x.name)",
         },
     ])?;
     let ctx = Value::record([("name", Value::from("n"))]);
@@ -466,11 +482,11 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
     let error = Program::parse(&[
         Source {
             name: "a.bv",
-            text: "fn page(ctx) => ctx",
+            text: "(defn page [ctx] ctx)",
         },
         Source {
             name: "b.bv",
-            text: "\nfn page(ctx) => ctx",
+            text: "\n(defn page [ctx] ctx)",
         },
     ])
     .err()
@@ -485,14 +501,12 @@ fn functions_share_one_namespace_across_sources() -> Result<()> {
 #[test]
 fn functions_used_by_lists_callees_before_callers() -> Result<()> {
     let program = parse(
-        r#"
-        fn page(ctx) => layout(home(ctx), if ctx.flag then item(ctx) else [])
-        fn layout(top, rest) => html(body(top, rest))
-        fn home(ctx) => a({href: "/"}, base(ctx))
-        fn item(ctx) => ul(map(ctx.items, base))
-        fn base(x) => x.title
-        fn unused(ctx) => ctx
-    "#,
+        r#"(defn page [ctx] (layout (home ctx) (if ctx.flag (item ctx) [])))
+(defn layout [top rest] (html (body top rest)))
+(defn home [ctx] (a {:href "/"} (base ctx)))
+(defn item [ctx] (ul (map ctx.items base)))
+(defn base [x] x.title)
+(defn unused [ctx] ctx)"#,
     )?;
     assert_eq!(
         program.functions_used_by("page"),
@@ -510,16 +524,16 @@ fn functions_used_by_lists_callees_before_callers() -> Result<()> {
 #[test]
 fn entry_results_that_stand_for_html_render_as_fragments() -> Result<()> {
     assert_eq!(
-        render(r#"fn page(ctx) => [p("a"), "b", []]"#, empty())?,
+        render(r#"(defn page [ctx] [(p "a") "b" []])"#, empty())?,
         "<p>a</p>b"
     );
-    assert_eq!(render(r#"fn page(ctx) => "text""#, empty())?, "text");
+    assert_eq!(render(r#"(defn page [ctx] "text")"#, empty())?, "text");
     Ok(())
 }
 
 #[test]
 fn void_elements_take_no_child_arguments() -> Result<()> {
-    for text in [r#"fn page(ctx) => br("x")"#, "fn page(ctx) => br([])"] {
+    for text in [r#"(defn page [ctx] (br "x"))"#, "(defn page [ctx] (br []))"] {
         assert_eq!(
             render_error(text, empty())?.kind(),
             ErrorKind::Html,
@@ -546,15 +560,15 @@ fn check_and_render_report_the_same_error() -> Result<()> {
     let ctx_type = Type::record([("title", Type::String), ("flag", Type::Bool)]);
     let ctx = Value::record([("title", Value::from("t")), ("flag", Value::from(true))]);
     for text in [
-        "fn page(ctx) => ctx.flag",
-        "fn page(ctx) => p(if ctx.title then \"a\" else \"b\")",
-        "fn page(ctx) => p(map(ctx.flag, item))\nfn item(x) => span(x)",
-        "fn page(ctx) => p(ctx.title.name)",
-        "fn page(ctx) => p(ctx.titel)",
-        "fn page(ctx) => p(concat(ctx.title, ctx.flag))",
-        "fn page(ctx) => p({id: ctx.flag})",
-        "fn page(ctx) => p(ctx.flag)",
-        "fn page(ctx) => br(ctx.title)",
+        "(defn page [ctx] ctx.flag)",
+        "(defn page [ctx] (p (if ctx.title \"a\" \"b\")))",
+        "(defn page [ctx] (p (map ctx.flag item)))\n(defn item [x] (span x))",
+        "(defn page [ctx] (p ctx.title.name))",
+        "(defn page [ctx] (p ctx.titel))",
+        "(defn page [ctx] (p (concat ctx.title ctx.flag)))",
+        "(defn page [ctx] (p {:id ctx.flag}))",
+        "(defn page [ctx] (p ctx.flag))",
+        "(defn page [ctx] (br ctx.title))",
     ] {
         assert_eq!(
             check_error(text, &ctx_type)?.to_string(),
@@ -575,11 +589,11 @@ fn post_type() -> Type {
 
 #[test]
 fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
-    let text = "fn page(ctx) =>\n  div(if ctx.flag then p(ctx.titel) else [], ul(map(ctx.items, item)))\nfn item(x) => li(x.name)";
+    let text = "(defn page [ctx]\n  (div (if ctx.flag (p ctx.titel) []) (ul (map ctx.items item))))\n(defn item [x] (li x.name))";
     let error = check_error(text, &post_type())?;
     assert_eq!(
         error.to_string(),
-        "t.bv:2:30: unknown field \"titel\" (fields: flag, title, items)\n  in page"
+        "t.bv:2:28: unknown field \"titel\" (fields: flag, title, items)\n  in page"
     );
     // Rendering with this value takes the else branch and maps nothing, so it meets neither error.
     let ctx = Value::record([
@@ -588,7 +602,7 @@ fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
         ("items", Value::from(Vec::new())),
     ]);
     assert!(render(text, ctx).is_ok());
-    let text = "fn page(ctx) => ul(map(ctx.items, item))\nfn item(x) => li(x.nam)";
+    let text = "(defn page [ctx] (ul (map ctx.items item)))\n(defn item [x] (li x.nam))";
     let error = check_error(text, &post_type())?;
     assert_eq!(error.kind(), ErrorKind::Field);
     assert_eq!(
@@ -600,13 +614,13 @@ fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
 
 #[test]
 fn check_finds_misspelled_attributes() -> Result<()> {
-    let text = "fn page(ctx) =>\n  div(if ctx.flag then a({herf: \"/\"}, ctx.title) else [])";
+    let text = "(defn page [ctx]\n  (div (if ctx.flag (a {:herf \"/\"} ctx.title) [])))";
     let error = check_error(text, &post_type())?;
     assert_eq!(error.kind(), ErrorKind::Html);
     assert!(
         error
             .to_string()
-            .starts_with("t.bv:2:24: <a> has no attribute \"herf\"; it takes href,"),
+            .starts_with("t.bv:2:22: <a> has no attribute \"herf\"; it takes href,"),
         "{error}"
     );
     Ok(())
@@ -614,7 +628,7 @@ fn check_finds_misspelled_attributes() -> Result<()> {
 
 #[test]
 fn check_rejects_functions_no_entry_calls() -> Result<()> {
-    let text = "fn page(ctx) => p(ctx.title)\nfn unused(x) => p(x.titel)";
+    let text = "(defn page [ctx] (p ctx.title))\n(defn unused [x] (p x.titel))";
     let error = check_error(text, &post_type())?;
     assert_eq!(
         error.to_string(),
@@ -627,23 +641,23 @@ fn check_rejects_functions_no_entry_calls() -> Result<()> {
 fn check_finds_elements_where_they_cannot_go() -> Result<()> {
     for (text, message) in [
         (
-            "fn page(ctx) => p(if ctx.flag then div(ctx.title) else [])",
+            "(defn page [ctx] (p (if ctx.flag (div ctx.title) [])))",
             "<p> cannot contain block elements such as <p> and <div>; it takes text, phrasing elements such as <span> and <a>",
         ),
         (
-            "fn page(ctx) => ul(map(ctx.items, item))\nfn item(x) => p(x.name)",
+            "(defn page [ctx] (ul (map ctx.items item)))\n(defn item [x] (p x.name))",
             "<ul> cannot contain block elements such as <p> and <div>; it takes <li>",
         ),
         (
-            "fn page(ctx) => html(head(p(ctx.title)), body())",
+            "(defn page [ctx] (html (head (p ctx.title)) (body)))",
             "<head> cannot contain block elements such as <p> and <div>; it takes <meta>, <link>, <title>, styles, and JSON",
         ),
         (
-            "fn page(ctx) => div(a({href: \"/\"}, span(a({href: \"/a\"}, ctx.title))))",
+            "(defn page [ctx] (div (a {:href \"/\"} (span (a {:href \"/a\"} ctx.title)))))",
             "<a> cannot contain another <a>",
         ),
         (
-            "fn page(ctx) => p(a({href: \"/\"}, div(ctx.title)))",
+            "(defn page [ctx] (p (a {:href \"/\"} (div ctx.title))))",
             "<p> cannot contain block elements such as <p> and <div>; it takes text, phrasing elements such as <span> and <a>",
         ),
     ] {
@@ -653,7 +667,7 @@ fn check_finds_elements_where_they_cannot_go() -> Result<()> {
     }
     // A link around blocks is a block itself, so it can go where blocks go.
     let program = parse(
-        "fn page(ctx) => div(a({href: \"/\"}, div(ctx.title)), p(a({href: \"/\"}, ctx.title)))",
+        "(defn page [ctx] (div (a {:href \"/\"} (div ctx.title)) (p (a {:href \"/\"} ctx.title))))",
     )?;
     program.check(&[("page", post_type())])?;
     Ok(())
@@ -662,7 +676,7 @@ fn check_finds_elements_where_they_cannot_go() -> Result<()> {
 #[test]
 fn host_html_goes_only_where_its_type_allows() -> Result<()> {
     let ctx_type = |html: HtmlType| Type::record([("part", Type::Html(html))]);
-    let program = parse("fn page(ctx) => p(ctx.part)")?;
+    let program = parse("(defn page [ctx] (p ctx.part))")?;
     program.check(&[("page", ctx_type(HtmlType::Phrasing))])?;
     for html in [HtmlType::Flow, HtmlType::Metadata] {
         assert!(
@@ -697,29 +711,29 @@ fn host_html_goes_only_where_its_type_allows() -> Result<()> {
 #[test]
 fn if_and_lists_take_the_least_common_type() -> Result<()> {
     for text in [
-        r#"fn page(ctx) => p(if ctx.flag then span("draft") else [])"#,
-        r#"fn page(ctx) => p(if ctx.flag then "text" else em("html"))"#,
-        r#"fn page(ctx) => p(["text", em("html"), map(ctx.items, item)])
-fn item(x) => span(x.name)"#,
-        r#"fn page(ctx) => p(map(pick(ctx), name))
-fn pick(ctx) => if ctx.flag then [{n: "a"}] else []
-fn name(x) => x.n"#,
+        r#"(defn page [ctx] (p (if ctx.flag (span "draft") [])))"#,
+        r#"(defn page [ctx] (p (if ctx.flag "text" (em "html"))))"#,
+        r#"(defn page [ctx] (p ["text" (em "html") (map ctx.items item)]))
+(defn item [x] (span x.name))"#,
+        r#"(defn page [ctx] (p (map (pick ctx) name)))
+(defn pick [ctx] (if ctx.flag [{:n "a"}] []))
+(defn name [x] x.n)"#,
     ] {
         let program = parse(text)?;
         program.check(&[("page", post_type())])?;
     }
     for (text, message) in [
         (
-            r#"fn page(ctx) => p(if ctx.flag then ctx.flag else "no")"#,
+            r#"(defn page [ctx] (p (if ctx.flag ctx.flag "no")))"#,
             "the two sides of if have different types: Bool and String",
         ),
         (
-            "fn page(ctx) => p(if ctx.flag then ctx.flag else [])",
+            "(defn page [ctx] (p (if ctx.flag ctx.flag [])))",
             "the two sides of if have different types: Bool and []",
         ),
         (
-            r#"fn page(ctx) => p(map([{a: "x"}, {b: "y"}], f))
-fn f(x) => x.a"#,
+            r#"(defn page [ctx] (p (map [{:a "x"} {:b "y"}] f)))
+(defn f [x] x.a)"#,
             "the items of a list have different types: Record {a} and Record {b}",
         ),
     ] {
@@ -734,41 +748,41 @@ fn f(x) => x.a"#,
 fn check_finds_values_used_where_they_do_not_fit() -> Result<()> {
     for (text, kind) in [
         (
-            "fn page(ctx) => p(concat(\"a\", ctx.flag))",
+            "(defn page [ctx] (p (concat \"a\" ctx.flag)))",
             ErrorKind::Type,
         ),
         (
-            "fn page(ctx) => a({href: ctx.flag}, \"x\")",
+            "(defn page [ctx] (a {:href ctx.flag} \"x\"))",
             ErrorKind::Type,
         ),
         (
-            "fn page(ctx) => a({onclick: \"x\"}, \"x\")",
+            "(defn page [ctx] (a {:onclick \"x\"} \"x\"))",
             ErrorKind::Html,
         ),
-        ("fn page(ctx) => p(ctx.flag)", ErrorKind::Type),
+        ("(defn page [ctx] (p ctx.flag))", ErrorKind::Type),
         (
-            "fn page(ctx) => p(if ctx.title then \"a\" else \"b\")",
+            "(defn page [ctx] (p (if ctx.title \"a\" \"b\")))",
             ErrorKind::Type,
         ),
         (
-            "fn page(ctx) => ul(map(ctx.title, f))\nfn f(x) => x",
+            "(defn page [ctx] (ul (map ctx.title f)))\n(defn f [x] x)",
             ErrorKind::Type,
         ),
-        ("fn page(ctx) => p(ctx.title.length)", ErrorKind::Type),
-        ("fn page(ctx) => ctx", ErrorKind::Type),
-        ("fn page(ctx) => ctx.flag", ErrorKind::Type),
+        ("(defn page [ctx] (p ctx.title.length))", ErrorKind::Type),
+        ("(defn page [ctx] ctx)", ErrorKind::Type),
+        ("(defn page [ctx] ctx.flag)", ErrorKind::Type),
     ] {
         let error = check_error(text, &post_type())?;
         assert_eq!(error.kind(), kind, "{text}: {error}");
         assert!(error.span().is_some(), "{text}: {error}");
     }
     assert!(
-        parse("fn page(ctx) => p(ctx.title)")?
+        parse("(defn page [ctx] (p ctx.title))")?
             .check(&[("page", post_type())])
             .is_ok()
     );
     assert_eq!(
-        parse("fn page(ctx) => p(\"x\")")?
+        parse("(defn page [ctx] (p \"x\"))")?
             .check(&[("missing", post_type())])
             .err()
             .as_ref()
@@ -836,11 +850,11 @@ fn values_validate_against_their_exact_type() -> Result<()> {
 
 #[test]
 fn fields_are_read_from_records_that_functions_return() -> Result<()> {
-    let text = "fn page(ctx) => p(info(ctx).title, info(ctx).note)\nfn info(ctx) => {title: \"T\", note: ctx.note}";
+    let text = "(defn page [ctx] (show (info ctx)))\n(defn show [i] (p i.title i.note))\n(defn info [ctx] {:title \"T\" :note ctx.note})";
     let ctx = Value::record([("note", Value::from("n"))]);
     assert_eq!(render(text, ctx.clone())?, "<p>Tn</p>");
     let error = render_error(
-        "fn page(ctx) => p(info(ctx).other)\nfn info(ctx) => {title: \"T\"}",
+        "(defn page [ctx] (show (info ctx)))\n(defn show [i] (p i.other))\n(defn info [ctx] {:title \"T\"})",
         ctx,
     )?;
     assert_eq!(error.message(), "unknown field \"other\" (fields: title)");
