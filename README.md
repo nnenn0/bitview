@@ -1,0 +1,50 @@
+# bitview
+
+HTML を、少数の値と関数だけで組み立てる小さい純粋関数型テンプレート言語。静的サイトジェネレーター [genbit](https://github.com/nnenn0/genbit) のテンプレートを書くために作っており、genbit から Rust のクレートとして使う。
+
+```
+fn page(ctx) =>
+  html({lang: "ja"},
+    head(title(concat(ctx.article.title, " | ", ctx.site.title))),
+    body(
+      article(
+        h1(ctx.article.title),
+        ul(map(ctx.article.tags, tag-item)),
+        ctx.content
+      )
+    )
+  )
+
+fn tag-item(tag) => li(a({href: tag.url}, tag.name))
+```
+
+## 言語
+
+- 値: String、Bool、List、Record、Html。
+- 名前: 小文字と数字を `-` でつないだもの（`entry-list`）。CSS のクラス名やファイル名と同じ綴りにできる。
+- コメント: `--` から行末まで。
+- 構文: 関数定義 `fn name(params) => expr`、関数呼び出し、引数、フィールド参照 `a.b`、文字列・リスト・レコードのリテラル、`if c then x else y`。
+- 標準ライブラリ: HTML 要素関数（`p(...)`、`a({href: "/"}, "top")` など。最初の引数がレコードなら属性）、`concat`（文字列の連結）、`map(list, 関数名)`。
+
+関数は値ではなく、`map` の第2引数にだけトップレベル関数の名前を書ける。空要素（`br`、`img` など）は子の引数を取らない。引数は同じ名前の関数を隠す（`fn heading(title) => h1(title)` と書ける）。隠された名前を呼ぶとエラーになる。再帰は読み込み時に拒否するので、評価は必ず停止する。ファイルやネットワークへのアクセスはない。
+
+## HTML の安全性
+
+- String は、シリアライザーが必ずエスケープする。Html は構築 API でしか作れず、テンプレートから HTML 文字列を Html にする手段（`raw`、`safe`）はない。
+- `href`・`src`・`cite` は、スキームが `http`・`https`・`mailto` か相対 URL でなければエラーにする。
+- `script`・`style` 要素、`on*` 属性、`style` 属性は、テンプレートからもホストの Rust からも作れない。`<style>` と JSON のデータ（JSON-LD など）だけは、ホストが `Html::style`・`Html::json` で作って渡す。`Html::json` が受け付けるのは、ブラウザーがスクリプトとして実行しない JSON の MIME タイプ（`application/json` と `application/…+json`）だけ。
+
+## 機能を足すとき
+
+機能の数は目標にしない。新しい構文、値の型、標準関数を足す前に、genbit の実際のテンプレートを置き換えるために必要かを確かめる。genbit が整形済みの値を渡すことで済むなら、言語には足さない。
+
+## 開発
+
+Rust の検証は `compose.yaml` の `cli` サービスで行う。
+
+```sh
+docker compose build cli
+docker compose run --rm cli fmt --check
+docker compose run --rm cli clippy --locked --all-targets --all-features -- -D warnings
+docker compose run --rm cli test --locked --all-targets --all-features
+```
