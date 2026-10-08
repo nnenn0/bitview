@@ -124,7 +124,7 @@
           }
         },
         {
-          "match": "(?<![a-z0-9.-])(html|head|body|title|meta|link|header|main|article|h1|h2|h3|h4|h5|h6|p|div|ul|ol|li|dl|dt|dd|blockquote|pre|hr|a|span|time|strong|em|code|br|img|table|thead|tbody|tr|th|td)(?=\\s*\\()",
+          "match": "(?<![a-z0-9.-])(html|head|body|title|meta|link|header|footer|main|nav|section|article|aside|h1|h2|h3|h4|h5|h6|p|div|ul|ol|li|dl|dt|dd|blockquote|pre|hr|a|span|time|strong|em|code|br|img|table|thead|tbody|tr|th|td)(?=\\s*\\()",
           "captures": {
             "1": {
               "name": "entity.name.tag.bitview"
