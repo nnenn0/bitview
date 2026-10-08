@@ -136,8 +136,8 @@ fn concat(types: &[Ty]) -> Result<Ty, Error> {
 
 fn element(spec: &ElementSpec, types: &[Ty]) -> Result<Ty, Error> {
     let children = match types.split_first() {
-        Some((Ty::Record(attrs), children)) => {
-            for (name, ty) in attrs {
+        Some((Ty::Record(attributes), children)) => {
+            for (name, ty) in attributes {
                 html::check_attribute(spec, name)?;
                 if !matches!(ty, Ty::String | Ty::Never) {
                     return Err(Error::not_a_string_attribute(spec, name, ty));

@@ -35,13 +35,13 @@ fn write_nodes(output: &mut String, nodes: &[Node]) {
             Node::Text(text) => escape(output, text),
             Node::Element {
                 spec,
-                attrs,
+                attributes,
                 children,
                 ..
             } => {
                 output.push('<');
                 output.push_str(spec.name);
-                for (name, value) in attrs {
+                for (name, value) in attributes {
                     output.push(' ');
                     output.push_str(name);
                     output.push_str("=\"");
