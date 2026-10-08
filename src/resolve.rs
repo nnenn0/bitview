@@ -7,19 +7,71 @@ use crate::{
     error::{Error, ErrorKind, Span},
     html,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
-pub(crate) type Index = HashMap<String, usize>;
+/// Names a function in [`Functions`]. Only this module issues ids, and only for the functions it
+/// resolves, so every id names one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct FunctionId(usize);
 
-/// What a call needs to know about the function it names.
-#[derive(Clone, Copy)]
-struct Signature {
-    position: usize,
-    arity: usize,
+/// The resolved functions, in the order of the sources, with their names.
+pub(crate) struct Functions {
+    list: Vec<Function>,
+    index: HashMap<String, FunctionId>,
 }
 
-pub(crate) fn resolve(defs: Vec<Def>) -> Result<(Vec<Function>, Index), Error> {
-    let mut signatures = HashMap::new();
+impl Functions {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "every id is issued for a function in the list"
+    )]
+    pub(crate) fn get(&self, id: FunctionId) -> &Function {
+        &self.list[id.0]
+    }
+
+    pub(crate) fn find(&self, name: &str) -> Option<FunctionId> {
+        self.index.get(name).copied()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (FunctionId, &Function)> {
+        self.list
+            .iter()
+            .enumerate()
+            .map(|(position, function)| (FunctionId(position), function))
+    }
+
+    /// The functions that `entry` may call, including itself, each after the functions it calls.
+    pub(crate) fn used_by(&self, entry: FunctionId) -> Vec<FunctionId> {
+        let mut order = Vec::new();
+        self.post_order(entry, &mut HashSet::new(), &mut order);
+        order
+    }
+
+    fn post_order(
+        &self,
+        id: FunctionId,
+        visited: &mut HashSet<FunctionId>,
+        order: &mut Vec<FunctionId>,
+    ) {
+        if !visited.insert(id) {
+            return;
+        }
+        for (callee, _) in &self.get(id).calls {
+            self.post_order(*callee, visited, order);
+        }
+        order.push(id);
+    }
+}
+
+/// What resolving needs to know about a function before its body is resolved.
+struct Signature {
+    id: FunctionId,
+    arity: usize,
+    span: Span,
+}
+
+pub(crate) fn resolve(defs: Vec<Def>) -> Result<Functions, Error> {
+    let mut signatures: HashMap<String, Signature> = HashMap::new();
     for (position, def) in defs.iter().enumerate() {
         if is_builtin(&def.name) {
             return Err(Error::at(
@@ -31,31 +83,40 @@ pub(crate) fn resolve(defs: Vec<Def>) -> Result<(Vec<Function>, Index), Error> {
                 ),
             ));
         }
-        let signature = Signature {
-            position,
-            arity: def.params.len(),
-        };
-        if let Some(previous) = signatures.insert(def.name.clone(), signature) {
-            let previous = defs.get(previous.position).map_or_else(String::new, |def| {
-                format!(" (first defined at {})", def.span)
-            });
-            return Err(Error::at(
-                ErrorKind::Name,
-                &def.span,
-                format!("function {} is defined twice{previous}", def.name),
-            ));
+        match signatures.entry(def.name.clone()) {
+            Entry::Occupied(first) => {
+                return Err(Error::at(
+                    ErrorKind::Name,
+                    &def.span,
+                    format!(
+                        "function {} is defined twice (first defined at {})",
+                        def.name,
+                        first.get().span
+                    ),
+                ));
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(Signature {
+                    id: FunctionId(position),
+                    arity: def.params.len(),
+                    span: def.span.clone(),
+                });
+            }
         }
     }
-    let functions = defs
+    let list = defs
         .into_iter()
         .map(|def| resolve_function(def, &signatures))
         .collect::<Result<Vec<_>, _>>()?;
+    let functions = Functions {
+        list,
+        index: signatures
+            .into_iter()
+            .map(|(name, signature)| (name, signature.id))
+            .collect(),
+    };
     check_recursion(&functions)?;
-    let index = signatures
-        .into_iter()
-        .map(|(name, signature)| (name, signature.position))
-        .collect();
-    Ok((functions, index))
+    Ok(functions)
 }
 
 fn is_builtin(name: &str) -> bool {
@@ -152,7 +213,7 @@ impl Scope<'_> {
                 format!("{name} is a parameter, not a function"),
             ));
         }
-        let callee = if let Some(&Signature { position, arity }) = self.signatures.get(name) {
+        let callee = if let Some(&Signature { id, arity, .. }) = self.signatures.get(name) {
             if args.len() != arity {
                 return Err(Error::at(
                     ErrorKind::Arity,
@@ -163,7 +224,7 @@ impl Scope<'_> {
                     ),
                 ));
             }
-            Callee::User(position)
+            Callee::User(id)
         } else if name == "map" {
             return self.map(args, span);
         } else if name == "concat" {
@@ -201,7 +262,7 @@ impl Scope<'_> {
                 format!("{function} is a parameter, not a function"),
             ));
         }
-        let Some(&Signature { position, arity }) = self.signatures.get(&function) else {
+        let Some(&Signature { id, arity, .. }) = self.signatures.get(&function) else {
             let message = if is_builtin(&function) {
                 format!("map can only apply functions defined in the templates, not {function}")
             } else {
@@ -218,34 +279,23 @@ impl Scope<'_> {
                 ),
             ));
         }
-        Ok(Expr::Call(
-            Callee::Map(position),
-            vec![self.expr(list)?],
-            span,
-        ))
+        Ok(Expr::Call(Callee::Map(id), vec![self.expr(list)?], span))
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum State {
-    Unvisited,
-    Visiting,
-    Done,
-}
-
-fn check_recursion(functions: &[Function]) -> Result<(), Error> {
+fn check_recursion(functions: &Functions) -> Result<(), Error> {
     let mut search = Search {
         functions,
-        states: vec![State::Unvisited; functions.len()],
+        done: HashSet::new(),
         path: Vec::new(),
     };
-    for start in 0..functions.len() {
-        search.visit(start)?;
+    for (id, _) in functions.iter() {
+        search.visit(id)?;
     }
     Ok(())
 }
 
-fn collect_calls(expr: &Expr, calls: &mut Vec<(usize, Span)>) {
+fn collect_calls(expr: &Expr, calls: &mut Vec<(FunctionId, Span)>) {
     match expr {
         Expr::Str(_) | Expr::Param(_) => {}
         Expr::List(items, _) => items.iter().for_each(|item| collect_calls(item, calls)),
@@ -270,48 +320,37 @@ fn collect_calls(expr: &Expr, calls: &mut Vec<(usize, Span)>) {
 }
 
 struct Search<'a> {
-    functions: &'a [Function],
-    states: Vec<State>,
-    path: Vec<usize>,
+    functions: &'a Functions,
+    done: HashSet<FunctionId>,
+    /// The functions being visited, each called by the one before it.
+    path: Vec<FunctionId>,
 }
 
 impl Search<'_> {
-    fn visit(&mut self, function: usize) -> Result<(), Error> {
-        if self.states.get(function) != Some(&State::Unvisited) {
+    fn visit(&mut self, id: FunctionId) -> Result<(), Error> {
+        if self.done.contains(&id) {
             return Ok(());
         }
-        self.set(function, State::Visiting);
-        self.path.push(function);
+        self.path.push(id);
         let functions = self.functions;
-        let calls = functions
-            .get(function)
-            .map_or(&[][..], |function| function.calls.as_slice());
-        for (callee, span) in calls {
-            match self.states.get(*callee) {
-                Some(State::Visiting) => return Err(self.cycle(*callee, span)),
-                Some(State::Unvisited) => self.visit(*callee)?,
-                _ => {}
+        for (callee, span) in &functions.get(id).calls {
+            if self.path.contains(callee) {
+                return Err(self.cycle(*callee, span));
             }
+            self.visit(*callee)?;
         }
         self.path.pop();
-        self.set(function, State::Done);
+        self.done.insert(id);
         Ok(())
     }
 
-    fn set(&mut self, function: usize, state: State) {
-        if let Some(slot) = self.states.get_mut(function) {
-            *slot = state;
-        }
-    }
-
-    fn cycle(&self, callee: usize, span: &Span) -> Error {
+    fn cycle(&self, callee: FunctionId, span: &Span) -> Error {
         let names = self
             .path
             .iter()
-            .skip_while(|&&function| function != callee)
+            .skip_while(|&&id| id != callee)
             .chain([&callee])
-            .filter_map(|&function| self.functions.get(function))
-            .map(|function| function.name.as_str())
+            .map(|&id| self.functions.get(id).name.as_str())
             .collect::<Vec<_>>();
         Error::at(
             ErrorKind::Recursion,
@@ -319,30 +358,4 @@ impl Search<'_> {
             format!("recursive calls are not allowed: {}", names.join(" -> ")),
         )
     }
-}
-
-pub(crate) fn used_by(functions: &[Function], entry: usize) -> Vec<usize> {
-    let mut visited = vec![false; functions.len()];
-    let mut order = Vec::new();
-    post_order(functions, entry, &mut visited, &mut order);
-    order
-}
-
-fn post_order(
-    functions: &[Function],
-    function: usize,
-    visited: &mut [bool],
-    order: &mut Vec<usize>,
-) {
-    match visited.get_mut(function) {
-        Some(seen @ false) => *seen = true,
-        _ => return,
-    }
-    for (callee, _) in functions
-        .get(function)
-        .map_or(&[][..], |function| function.calls.as_slice())
-    {
-        post_order(functions, *callee, visited, order);
-    }
-    order.push(function);
 }
