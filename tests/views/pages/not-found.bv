@@ -1,3 +1,4 @@
+-- 検索エンジンに載せないので、layout ではなく document を使い、noindex を指定する。
 fn not-found(ctx) =>
   document(ctx, concat("404 | ", ctx.site.title),
     meta({name: "robots", content: "noindex"}),

@@ -42,7 +42,7 @@ use ast::Function;
 use resolve::Index;
 use std::sync::Arc;
 
-/// A template source and the name errors use for it, such as `templates/page.bv`.
+/// A template source and the name errors use for it, such as `views/pages/page.bv`.
 #[derive(Debug, Clone, Copy)]
 pub struct Source<'a> {
     pub name: &'a str,

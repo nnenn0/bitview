@@ -1,18 +1,29 @@
+//! Renders and checks a copy of the views genbit creates for a new site, so the language is tested
+//! on a program of the size and shape it is written for.
+
 use bitview::{Html, Program, Source, Type, Value};
-use std::error::Error;
+use std::{error::Error, fs, path::Path};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn program() -> Result<Program> {
-    let sources = [
-        ("layout.bv", include_str!("templates/layout.bv")),
-        ("page.bv", include_str!("templates/page.bv")),
-        ("root.bv", include_str!("templates/root.bv")),
-        ("tag.bv", include_str!("templates/tag.bv")),
-        ("tags.bv", include_str!("templates/tags.bv")),
-        ("not-found.bv", include_str!("templates/not-found.bv")),
-    ];
-    let sources = sources.map(|(name, text)| Source { name, text });
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut sources = Vec::new();
+    for directory in ["views/pages", "views/components"] {
+        for file in fs::read_dir(root.join(directory))? {
+            let file = file?
+                .file_name()
+                .into_string()
+                .map_err(|_| "non-UTF-8 file name")?;
+            let text = fs::read_to_string(root.join(directory).join(&file))?;
+            sources.push((format!("{directory}/{file}"), text));
+        }
+    }
+    sources.sort();
+    let sources = sources
+        .iter()
+        .map(|(name, text)| Source { name, text })
+        .collect::<Vec<_>>();
     Ok(Program::parse(&sources)?)
 }
 
@@ -21,7 +32,7 @@ const SITE_TITLE: &str = "Blog &amp; &lt;Notes&gt;";
 fn site() -> Value {
     Value::record([
         ("title", Value::from("Blog & <Notes>")),
-        ("description", Value::from("Posts")),
+        ("description", Value::from("Posts & more")),
         ("url", Value::from("https://example.com/")),
         (
             "og-image",
@@ -41,7 +52,6 @@ fn ctx(fields: Vec<(&str, Value)>) -> Result<Value> {
 
 fn indexed(url: &str, json: &str, fields: Vec<(&str, Value)>) -> Result<Value> {
     let mut all = vec![
-        ("description", Value::from("Posts & more")),
         ("canonical-url", Value::from(url)),
         (
             "json-ld",
@@ -97,13 +107,13 @@ fn head(title: &str) -> String {
     )
 }
 
-fn seo(title: &str, kind: &str, url: &str, json: &str) -> String {
+fn seo(title: &str, description: &str, kind: &str, url: &str, json: &str) -> String {
     format!(
         concat!(
-            "<meta name=\"description\" content=\"Posts &amp; more\">",
+            "<meta name=\"description\" content=\"{description}\">",
             "<link rel=\"canonical\" href=\"{url}\">",
             "<meta property=\"og:title\" content=\"{title}\">",
-            "<meta property=\"og:description\" content=\"Posts &amp; more\">",
+            "<meta property=\"og:description\" content=\"{description}\">",
             "<meta property=\"og:type\" content=\"{kind}\">",
             "<meta property=\"og:url\" content=\"{url}\">",
             "<meta property=\"og:site_name\" content=\"{site}\">",
@@ -112,6 +122,7 @@ fn seo(title: &str, kind: &str, url: &str, json: &str) -> String {
             "<script type=\"application/ld+json\">{json}</script>",
         ),
         title = title,
+        description = description,
         kind = kind,
         url = url,
         site = SITE_TITLE,
@@ -146,6 +157,7 @@ fn article_page() -> Result<()> {
     let expected = head(&title)
         + &seo(
             &title,
+            "Summary",
             "article",
             "https://example.com/entries/hello/",
             "{\"@type\":\"BlogPosting\"}",
@@ -166,7 +178,7 @@ fn article_page() -> Result<()> {
 }
 
 const ENTRY_LIST: &str = concat!(
-    "<ul class=\"unmarked-list\">",
+    "<ul class=\"entry-list\">",
     "<li><a href=\"/entries/new/\">New &amp; shiny</a><span class=\"entry-meta\"><time datetime=\"2026-09-17T09:00:00+09:00\">2026-09-17</time><span class=\"draft-badge\">draft</span></span></li>",
     "<li><a href=\"/entries/old/\">Old</a><span class=\"entry-meta\"><time datetime=\"2026-09-17T09:00:00+09:00\">2026-09-17</time></span></li>",
     "</ul>",
@@ -185,7 +197,13 @@ fn home_page() -> Result<()> {
     let ctx = indexed("https://example.com/", json, vec![("entries", entries())])?;
     let page = program()?.render("root", ctx)?.to_document()?;
     let expected = head(SITE_TITLE)
-        + &seo(SITE_TITLE, "website", "https://example.com/", json)
+        + &seo(
+            SITE_TITLE,
+            "Posts &amp; more",
+            "website",
+            "https://example.com/",
+            json,
+        )
         + &body(
             &format!("<h1>{SITE_TITLE}</h1>"),
             &format!(
@@ -208,7 +226,7 @@ fn tag_page() -> Result<()> {
     let page = program()?.render("tag", ctx)?.to_document()?;
     let title = format!("rust | {SITE_TITLE}");
     let expected = head(&title)
-        + &seo(&title, "website", url, json)
+        + &seo(&title, "rust の記事一覧", "website", url, json)
         + &body(
             HOME_LINK,
             &format!(
@@ -238,11 +256,11 @@ fn tags_page() -> Result<()> {
     let page = program()?.render("tags", ctx)?.to_document()?;
     let title = format!("tags | {SITE_TITLE}");
     let expected = head(&title)
-        + &seo(&title, "website", url, json)
+        + &seo(&title, "記事のタグ一覧", "website", url, json)
         + &body(
             HOME_LINK,
             concat!(
-                "<h1>tags</h1><ul class=\"unmarked-list\">",
+                "<h1>tags</h1><ul class=\"tag-list\">",
                 "<li><a href=\"/tags/rust/\">rust</a> (2)</li>",
                 "<li><a href=\"/tags/c++/\">c++</a> (1)</li>",
                 "</ul>",
@@ -276,7 +294,7 @@ fn entry_functions_are_known_by_name() -> Result<()> {
 }
 
 #[test]
-fn pages_use_functions_from_the_layout_to_the_page() -> Result<()> {
+fn pages_use_functions_from_the_document_to_the_page() -> Result<()> {
     let program = program()?;
     let base = ["document", "seo", "layout"];
     for (entry, own) in [
@@ -305,7 +323,7 @@ fn pages_use_functions_from_the_layout_to_the_page() -> Result<()> {
                 "tag",
             ][..],
         ),
-        ("tags", &["home-link", "tag-count-item", "tags"][..]),
+        ("tags", &["home-link", "tag-count", "tags"][..]),
     ] {
         let expected = base.iter().chain(own).copied().collect::<Vec<_>>();
         assert_eq!(program.functions_used_by(entry), Some(expected), "{entry}");
@@ -317,7 +335,7 @@ fn pages_use_functions_from_the_layout_to_the_page() -> Result<()> {
     Ok(())
 }
 
-/// The types genbit passes, which `Program::check` holds the templates to before any page renders.
+/// The types genbit passes, which `Program::check` holds the views to before any page renders.
 fn context_type(fields: Vec<(&str, Type)>) -> Type {
     let site = Type::record([
         ("title", Type::String),
@@ -331,11 +349,7 @@ fn context_type(fields: Vec<(&str, Type)>) -> Type {
 }
 
 fn indexed_type(fields: Vec<(&str, Type)>) -> Type {
-    let mut all = vec![
-        ("description", Type::String),
-        ("canonical-url", Type::String),
-        ("json-ld", Type::Html),
-    ];
+    let mut all = vec![("canonical-url", Type::String), ("json-ld", Type::Html)];
     all.extend(fields);
     context_type(all)
 }
