@@ -7,10 +7,14 @@ use crate::{
 };
 
 pub(crate) struct Evaluator<'a> {
-    pub(crate) functions: &'a Functions,
+    functions: &'a Functions,
 }
 
-impl Evaluator<'_> {
+impl<'a> Evaluator<'a> {
+    pub(crate) fn new(functions: &'a Functions) -> Self {
+        Self { functions }
+    }
+
     pub(crate) fn call(&self, function: FunctionId, args: &[Value]) -> Result<Value, Error> {
         self.eval(&self.functions.get(function).body, args)
     }

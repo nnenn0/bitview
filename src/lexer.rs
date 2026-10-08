@@ -1,5 +1,5 @@
 use crate::error::{Error, ErrorKind, Span};
-use std::{iter::Peekable, str::Chars, sync::Arc};
+use std::{fmt, iter::Peekable, str::Chars, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Token {
@@ -21,26 +21,27 @@ pub(crate) enum Token {
     Arrow,
 }
 
-impl Token {
-    pub(crate) fn describe(&self) -> String {
-        match self {
-            Self::Ident(name) => format!("`{name}`"),
-            Self::Str(_) => "a string".to_owned(),
-            Self::Fn => "`fn`".to_owned(),
-            Self::If => "`if`".to_owned(),
-            Self::Then => "`then`".to_owned(),
-            Self::Else => "`else`".to_owned(),
-            Self::LParen => "`(`".to_owned(),
-            Self::RParen => "`)`".to_owned(),
-            Self::LBracket => "`[`".to_owned(),
-            Self::RBracket => "`]`".to_owned(),
-            Self::LBrace => "`{`".to_owned(),
-            Self::RBrace => "`}`".to_owned(),
-            Self::Comma => "`,`".to_owned(),
-            Self::Colon => "`:`".to_owned(),
-            Self::Dot => "`.`".to_owned(),
-            Self::Arrow => "`=>`".to_owned(),
-        }
+impl fmt::Display for Token {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let symbol = match self {
+            Self::Ident(name) => return write!(formatter, "`{name}`"),
+            Self::Str(_) => return formatter.write_str("a string"),
+            Self::Fn => "fn",
+            Self::If => "if",
+            Self::Then => "then",
+            Self::Else => "else",
+            Self::LParen => "(",
+            Self::RParen => ")",
+            Self::LBracket => "[",
+            Self::RBracket => "]",
+            Self::LBrace => "{",
+            Self::RBrace => "}",
+            Self::Comma => ",",
+            Self::Colon => ":",
+            Self::Dot => ".",
+            Self::Arrow => "=>",
+        };
+        write!(formatter, "`{symbol}`")
     }
 }
 

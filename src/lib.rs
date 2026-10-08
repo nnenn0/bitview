@@ -138,10 +138,7 @@ impl Program {
     /// functions that were running.
     pub fn render(&self, entry: &str, ctx: Value) -> Result<Html, Error> {
         let (id, function) = self.entry(entry)?;
-        let evaluator = eval::Evaluator {
-            functions: &self.functions,
-        };
-        let result = evaluator
+        let result = eval::Evaluator::new(&self.functions)
             .call(id, &[ctx])
             .map_err(|error| error.in_function(entry, None))?;
         eval::into_html([result])
