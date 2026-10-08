@@ -2,7 +2,7 @@
 //! only `serializer` turns it into text.
 
 use crate::{
-    content::{self, Category, Content, FLOW, PHRASING},
+    content::{Categories, Category, Content, FLOW, PHRASING},
     error::{Error, ErrorKind},
     serializer,
 };
@@ -14,7 +14,10 @@ pub(crate) struct ElementSpec {
     /// The attributes this element takes besides [`GLOBAL_ATTRIBUTES`], `data-*`, and `aria-*`.
     attributes: &'static [&'static str],
     category: Category,
-    holds: &'static [Category],
+    holds: Categories,
+    /// A link takes the place of its contents, so it is phrasing only where they are, and
+    /// `category` is not used. Browsers split a link inside a link into two.
+    link: bool,
 }
 
 const fn normal(name: &'static str) -> ElementSpec {
@@ -23,7 +26,8 @@ const fn normal(name: &'static str) -> ElementSpec {
         void: false,
         attributes: &[],
         category: Category::Flow,
-        holds: FLOW,
+        holds: Categories::of(FLOW),
+        link: false,
     }
 }
 
@@ -33,7 +37,8 @@ const fn void(name: &'static str) -> ElementSpec {
         void: true,
         attributes: &[],
         category: Category::Phrasing,
-        holds: &[],
+        holds: Categories::NONE,
+        link: false,
     }
 }
 
@@ -46,8 +51,45 @@ impl ElementSpec {
         Self { category, ..self }
     }
 
-    const fn holds(self, holds: &'static [Category]) -> Self {
-        Self { holds, ..self }
+    const fn holds(self, holds: &[Category]) -> Self {
+        Self {
+            holds: Categories::of(holds),
+            ..self
+        }
+    }
+
+    const fn link(self) -> Self {
+        Self { link: true, ..self }
+    }
+
+    /// What this element is where it is placed when it holds `children`.
+    pub(crate) fn place(&self, children: Content) -> Result<Content, Error> {
+        if let Some(outside) = children.outside(self.holds) {
+            return Err(Error::new(
+                ErrorKind::Html,
+                format!(
+                    "<{}> cannot contain {}; it takes {}",
+                    self.name,
+                    outside.description(),
+                    self.holds.description()
+                ),
+            ));
+        }
+        if !self.link {
+            return Ok(Content::element(self.category, children.has_link()));
+        }
+        if children.has_link() {
+            return Err(Error::new(
+                ErrorKind::Html,
+                format!("<{0}> cannot contain another <{0}>", self.name),
+            ));
+        }
+        let category = if children.outside(Categories::of(PHRASING)).is_some() {
+            Category::Flow
+        } else {
+            Category::Phrasing
+        };
+        Ok(Content::element(category, true))
     }
 }
 
@@ -120,7 +162,7 @@ const ELEMENTS: &[ElementSpec] = &[
     normal("blockquote").takes(&["cite"]),
     normal("pre").holds(PHRASING),
     void("hr").is(Category::Flow),
-    normal("a").is(Category::Phrasing).takes(&[
+    normal("a").link().takes(&[
         "href",
         "target",
         "rel",
@@ -374,7 +416,7 @@ pub(crate) fn build_element(
             }
         }
     }
-    let content = place(spec, children.content())?;
+    let content = spec.place(children.content())?;
     Ok(Html(vec![Node::Element {
         spec,
         attrs,
@@ -382,10 +424,6 @@ pub(crate) fn build_element(
         depth,
         content,
     }]))
-}
-
-pub(crate) fn place(spec: &ElementSpec, children: Content) -> Result<Content, Error> {
-    content::place(spec.name, spec.category, spec.holds, children)
 }
 
 pub(crate) fn check_attribute(spec: &ElementSpec, name: &str) -> Result<(), Error> {

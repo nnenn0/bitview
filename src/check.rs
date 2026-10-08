@@ -161,5 +161,5 @@ fn element(spec: &ElementSpec, types: &[Ty]) -> Result<Ty, Error> {
         };
         content = content.union(child_content);
     }
-    Ok(Ty::Html(html::place(spec, content)?))
+    Ok(Ty::Html(spec.place(content)?))
 }
