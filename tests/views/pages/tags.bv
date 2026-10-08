@@ -4,5 +4,5 @@
     [(h1 "tags")
      (ul {:class "tag-list"} (map ctx.tags tag-count))]))
 
-(defn tag-count [tag]
+(defn- tag-count [tag]
   (li (a {:href tag.url} tag.name) (concat " (" tag.count ")")))

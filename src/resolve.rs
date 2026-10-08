@@ -7,17 +7,18 @@ use crate::{
     error::{Error, ErrorKind, Span},
     html,
 };
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{HashMap, HashSet};
 
 /// Names a function in [`Functions`]. Only this module issues ids, and only for the functions it
 /// resolves, so every id names one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FunctionId(usize);
 
-/// The resolved functions, in the order of the sources, with their names.
+/// The resolved functions, in the order of the sources. Only the public ones can be found by
+/// name; a private function is reached only through the calls in its own source.
 pub(crate) struct Functions {
     list: Vec<Function>,
-    index: HashMap<String, FunctionId>,
+    public: HashMap<String, FunctionId>,
 }
 
 impl Functions {
@@ -30,7 +31,7 @@ impl Functions {
     }
 
     pub(crate) fn find(&self, name: &str) -> Option<FunctionId> {
-        self.index.get(name).copied()
+        self.public.get(name).copied()
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (FunctionId, &Function)> {
@@ -67,50 +68,98 @@ impl Functions {
 struct Signature {
     id: FunctionId,
     arity: usize,
+    /// The position of the source that defines it.
+    source: usize,
     span: Span,
 }
 
-pub(crate) fn resolve(defs: Vec<Def>) -> Result<Functions, Error> {
-    let mut signatures: HashMap<String, Signature> = HashMap::new();
-    for (position, def) in defs.iter().enumerate() {
-        if is_builtin(&def.name) {
-            return Err(Error::at(
-                ErrorKind::Name,
-                &def.span,
-                format!(
-                    "{} is a built-in function and cannot be redefined",
-                    def.name
-                ),
-            ));
-        }
-        match signatures.entry(def.name.clone()) {
-            Entry::Occupied(first) => {
+/// The functions each source can call by name.
+struct Names {
+    public: HashMap<String, Signature>,
+    /// The private functions of each source, by the position of the source.
+    private: Vec<HashMap<String, Signature>>,
+}
+
+impl Names {
+    /// What `name` calls in `source`. A private function hides a public one of the same name
+    /// defined in another source, so adding a public function elsewhere never changes what a
+    /// source calls.
+    fn get(&self, source: usize, name: &str) -> Option<&Signature> {
+        self.private
+            .get(source)
+            .and_then(|private| private.get(name))
+            .or_else(|| self.public.get(name))
+    }
+
+    /// A private function `name` of some other source, for an error that says why it is out of
+    /// reach.
+    fn private_elsewhere(&self, name: &str) -> Option<&Signature> {
+        self.private.iter().find_map(|private| private.get(name))
+    }
+}
+
+/// Resolves the definitions of each source, given in the order of the sources.
+pub(crate) fn resolve(sources: Vec<Vec<Def>>) -> Result<Functions, Error> {
+    let mut names = Names {
+        public: HashMap::new(),
+        private: Vec::with_capacity(sources.len()),
+    };
+    let mut position = 0;
+    for (source, defs) in sources.iter().enumerate() {
+        let mut private = HashMap::new();
+        for def in defs {
+            if is_builtin(&def.name) {
+                return Err(Error::at(
+                    ErrorKind::Name,
+                    &def.span,
+                    format!(
+                        "{} is a built-in function and cannot be redefined",
+                        def.name
+                    ),
+                ));
+            }
+            // Public functions share one namespace; a private one shares only its source's.
+            let first = private.get(&def.name).or_else(|| {
+                names
+                    .public
+                    .get(&def.name)
+                    .filter(|first: &&Signature| def.public || first.source == source)
+            });
+            if let Some(first) = first {
                 return Err(Error::at(
                     ErrorKind::Name,
                     &def.span,
                     format!(
                         "function {} is defined twice (first defined at {})",
-                        def.name,
-                        first.get().span
+                        def.name, first.span
                     ),
                 ));
             }
-            Entry::Vacant(slot) => {
-                slot.insert(Signature {
-                    id: FunctionId(position),
-                    arity: def.params.len(),
-                    span: def.span.clone(),
-                });
+            let signature = Signature {
+                id: FunctionId(position),
+                arity: def.params.len(),
+                source,
+                span: def.span.clone(),
+            };
+            position += 1;
+            if def.public {
+                names.public.insert(def.name.clone(), signature);
+            } else {
+                private.insert(def.name.clone(), signature);
             }
         }
+        names.private.push(private);
     }
-    let list = defs
+    let list = sources
         .into_iter()
-        .map(|def| resolve_function(def, &signatures))
+        .enumerate()
+        .flat_map(|(source, defs)| defs.into_iter().map(move |def| (source, def)))
+        .map(|(source, def)| resolve_function(def, &names, source))
         .collect::<Result<Vec<_>, _>>()?;
     let functions = Functions {
         list,
-        index: signatures
+        public: names
+            .public
             .into_iter()
             .map(|(name, signature)| (name, signature.id))
             .collect(),
@@ -123,7 +172,7 @@ fn is_builtin(name: &str) -> bool {
     matches!(name, "map" | "concat") || html::element_spec(name).is_some()
 }
 
-fn resolve_function(def: Def, signatures: &HashMap<String, Signature>) -> Result<Function, Error> {
+fn resolve_function(def: Def, names: &Names, source: usize) -> Result<Function, Error> {
     let mut params = Vec::with_capacity(def.params.len());
     for (name, span) in def.params {
         if params.contains(&name) {
@@ -137,7 +186,8 @@ fn resolve_function(def: Def, signatures: &HashMap<String, Signature>) -> Result
     }
     let scope = Scope {
         params: &params,
-        signatures,
+        names,
+        source,
     };
     let body = scope.expr(def.body)?;
     let mut calls = Vec::new();
@@ -145,6 +195,7 @@ fn resolve_function(def: Def, signatures: &HashMap<String, Signature>) -> Result
     Ok(Function {
         body,
         name: def.name,
+        public: def.public,
         arity: params.len(),
         span: def.span,
         calls,
@@ -153,10 +204,26 @@ fn resolve_function(def: Def, signatures: &HashMap<String, Signature>) -> Result
 
 struct Scope<'a> {
     params: &'a [String],
-    signatures: &'a HashMap<String, Signature>,
+    names: &'a Names,
+    source: usize,
 }
 
 impl Scope<'_> {
+    fn function(&self, name: &str) -> Option<&Signature> {
+        self.names.get(self.source, name)
+    }
+
+    fn unknown_function(&self, name: &str, span: &Span) -> Error {
+        let message = match self.names.private_elsewhere(name) {
+            Some(private) => format!(
+                "{name} is defined with defn- in {}, so only that source can call it",
+                private.span.source()
+            ),
+            None => format!("unknown function {name}"),
+        };
+        Error::at(ErrorKind::Name, span, message)
+    }
+
     fn expr(&self, syntax: Syntax) -> Result<Expr, Error> {
         Ok(match syntax {
             Syntax::Str(text) => Expr::Str(text),
@@ -197,7 +264,7 @@ impl Scope<'_> {
         if let Some(position) = self.params.iter().position(|param| param == name) {
             return Ok(Expr::Param(position));
         }
-        let message = if self.signatures.contains_key(name) || is_builtin(name) {
+        let message = if self.function(name).is_some() || is_builtin(name) {
             format!("{name} is a function; functions are not values, so call it as ({name} ...)")
         } else {
             format!("unknown name {name}")
@@ -213,7 +280,7 @@ impl Scope<'_> {
                 format!("{name} is a parameter, not a function"),
             ));
         }
-        let callee = if let Some(&Signature { id, arity, .. }) = self.signatures.get(name) {
+        let callee = if let Some(&Signature { id, arity, .. }) = self.function(name) {
             if args.len() != arity {
                 return Err(Error::at(
                     ErrorKind::Arity,
@@ -239,11 +306,7 @@ impl Scope<'_> {
         } else if let Some(spec) = html::element_spec(name) {
             Callee::Element(spec)
         } else {
-            return Err(Error::at(
-                ErrorKind::Name,
-                &span,
-                format!("unknown function {name}"),
-            ));
+            return Err(self.unknown_function(name, &span));
         };
         Ok(Expr::Call(callee, self.exprs(args)?, span))
     }
@@ -262,13 +325,17 @@ impl Scope<'_> {
                 format!("{function} is a parameter, not a function"),
             ));
         }
-        let Some(&Signature { id, arity, .. }) = self.signatures.get(&function) else {
-            let message = if is_builtin(&function) {
-                format!("map can only apply functions defined in the templates, not {function}")
-            } else {
-                format!("unknown function {function}")
-            };
-            return Err(Error::at(ErrorKind::Name, &function_span, message));
+        let Some(&Signature { id, arity, .. }) = self.function(&function) else {
+            if is_builtin(&function) {
+                return Err(Error::at(
+                    ErrorKind::Name,
+                    &function_span,
+                    format!(
+                        "map can only apply functions defined in the templates, not {function}"
+                    ),
+                ));
+            }
+            return Err(self.unknown_function(&function, &function_span));
         };
         if arity != 1 {
             return Err(Error::at(

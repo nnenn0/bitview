@@ -289,6 +289,7 @@ fn entry_functions_are_known_by_name() -> Result<()> {
         assert!(program.has_entry(entry), "{entry}");
     }
     assert!(!program.has_entry("layout"));
+    assert!(!program.has_entry("tag-link"));
     assert!(!program.has_entry("missing"));
     Ok(())
 }
@@ -296,34 +297,22 @@ fn entry_functions_are_known_by_name() -> Result<()> {
 #[test]
 fn pages_use_functions_from_the_document_to_the_page() -> Result<()> {
     let program = program()?;
-    let base = ["document", "seo", "layout"];
+    // The private seo, entry-item, tag-link, and tag-count belong to the functions of their sources.
+    let base = ["document", "layout"];
     for (entry, own) in [
         (
             "page",
-            &["home-link", "draft-badge", "timestamp", "tag-link", "page"][..],
+            &["home-link", "draft-badge", "timestamp", "page"][..],
         ),
         (
             "root",
-            &[
-                "timestamp",
-                "draft-badge",
-                "entry-item",
-                "entry-list",
-                "root",
-            ][..],
+            &["timestamp", "draft-badge", "entry-list", "root"][..],
         ),
         (
             "tag",
-            &[
-                "home-link",
-                "timestamp",
-                "draft-badge",
-                "entry-item",
-                "entry-list",
-                "tag",
-            ][..],
+            &["home-link", "timestamp", "draft-badge", "entry-list", "tag"][..],
         ),
-        ("tags", &["home-link", "tag-count", "tags"][..]),
+        ("tags", &["home-link", "tags"][..]),
     ] {
         let expected = base.iter().chain(own).copied().collect::<Vec<_>>();
         assert_eq!(program.functions_used_by(entry), Some(expected), "{entry}");
