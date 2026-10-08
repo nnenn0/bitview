@@ -23,6 +23,7 @@
 
 mod ast;
 mod check;
+mod content;
 mod error;
 mod eval;
 mod html;
@@ -35,7 +36,7 @@ mod value;
 
 pub use error::{Error, ErrorKind, Frame, Span};
 pub use html::Html;
-pub use types::Type;
+pub use types::{HtmlType, Type};
 pub use value::Value;
 
 use ast::Function;

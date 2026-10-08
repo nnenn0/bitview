@@ -4,6 +4,7 @@
 
 use crate::{
     ast::{Callee, Expr, Function},
+    content::Content,
     error::{Error, ErrorKind, Span},
     html::{self, ElementSpec},
     types::Ty,
@@ -194,16 +195,20 @@ fn element(spec: &ElementSpec, types: &[Ty]) -> Result<Ty, Error> {
             format!("<{}> is a void element and takes no children", spec.name),
         ));
     }
-    if let Some(child) = children.iter().find(|child| !child.is_html()) {
-        let hint = if matches!(child, Ty::Record(_)) {
-            "; attributes must be the first argument"
-        } else {
-            ""
+    let mut content = Content::default();
+    for child in children {
+        let Some(child_content) = child.content() else {
+            let hint = if matches!(child, Ty::Record(_)) {
+                "; attributes must be the first argument"
+            } else {
+                ""
+            };
+            return Err(Error::new(
+                ErrorKind::Type,
+                format!("a {child} cannot be a child of <{}>{hint}", spec.name),
+            ));
         };
-        return Err(Error::new(
-            ErrorKind::Type,
-            format!("a {child} cannot be a child of <{}>{hint}", spec.name),
-        ));
+        content = content.union(child_content);
     }
-    Ok(Ty::Html)
+    Ok(Ty::Html(html::place(spec, content)?))
 }

@@ -1,4 +1,4 @@
-use bitview::{Error as BitviewError, ErrorKind, Html, Program, Source, Type, Value};
+use bitview::{Error as BitviewError, ErrorKind, Html, HtmlType, Program, Source, Type, Value};
 use std::error::Error;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -400,10 +400,10 @@ fn deep_nesting_fails_without_exhausting_the_stack() -> Result<()> {
     }
     let text = format!(
         "fn page(ctx) => {}\"x\"{}",
-        "p(".repeat(100),
+        "div(".repeat(100),
         ")".repeat(100)
     );
-    assert!(render(&text, empty())?.starts_with("<p><p>"));
+    assert!(render(&text, empty())?.starts_with("<div><div>"));
     Ok(())
 }
 
@@ -597,12 +597,83 @@ fn check_rejects_functions_no_entry_calls() -> Result<()> {
 }
 
 #[test]
+fn check_finds_elements_where_they_cannot_go() -> Result<()> {
+    for (text, message) in [
+        (
+            "fn page(ctx) => p(if ctx.flag then div(ctx.title) else [])",
+            "<p> cannot contain block elements such as <p> and <div>; it takes text, phrasing elements such as <span> and <a>",
+        ),
+        (
+            "fn page(ctx) => ul(map(ctx.items, item))\nfn item(x) => p(x.name)",
+            "<ul> cannot contain block elements such as <p> and <div>; it takes <li>",
+        ),
+        (
+            "fn page(ctx) => html(head(p(ctx.title)), body())",
+            "<head> cannot contain block elements such as <p> and <div>; it takes <meta>, <link>, <title>, styles, and JSON",
+        ),
+        (
+            "fn page(ctx) => div(a({href: \"/\"}, span(a({href: \"/a\"}, ctx.title))))",
+            "<a> cannot contain another <a>",
+        ),
+        (
+            "fn page(ctx) => p(a({href: \"/\"}, div(ctx.title)))",
+            "<p> cannot contain block elements such as <p> and <div>; it takes text, phrasing elements such as <span> and <a>",
+        ),
+    ] {
+        let error = check_error(text, &post_type())?;
+        assert_eq!(error.kind(), ErrorKind::Html, "{text}");
+        assert_eq!(error.message(), message, "{text}");
+    }
+    // A link around blocks is a block itself, so it can go where blocks go.
+    let program = parse(
+        "fn page(ctx) => div(a({href: \"/\"}, div(ctx.title)), p(a({href: \"/\"}, ctx.title)))",
+    )?;
+    program.check(&[("page", post_type())])?;
+    Ok(())
+}
+
+#[test]
+fn host_html_goes_only_where_its_type_allows() -> Result<()> {
+    let ctx_type = |html: HtmlType| Type::record([("part", Type::Html(html))]);
+    let program = parse("fn page(ctx) => p(ctx.part)")?;
+    program.check(&[("page", ctx_type(HtmlType::Phrasing))])?;
+    for html in [HtmlType::Flow, HtmlType::Metadata] {
+        assert!(
+            program.check(&[("page", ctx_type(html))]).is_err(),
+            "{html:?}"
+        );
+    }
+    let block = Html::element("div", Vec::new(), Html::text("x"))?;
+    assert!(
+        Type::Html(HtmlType::Flow)
+            .validate(&Value::from(block.clone()))
+            .is_ok()
+    );
+    let error = Type::Html(HtmlType::Phrasing)
+        .validate(&Value::from(block))
+        .err()
+        .ok_or("validated a block as phrasing")?;
+    assert_eq!(
+        error.message(),
+        "value is Html with block elements such as <p> and <div>, but the type is Phrasing Html"
+    );
+    let style = Html::style("p{}")?;
+    assert!(
+        Type::Html(HtmlType::Metadata)
+            .validate(&Value::from(style.clone()))
+            .is_ok()
+    );
+    assert!(Html::element("p", Vec::new(), style).is_err());
+    Ok(())
+}
+
+#[test]
 fn if_and_lists_take_the_least_common_type() -> Result<()> {
     for text in [
         r#"fn page(ctx) => p(if ctx.flag then span("draft") else [])"#,
         r#"fn page(ctx) => p(if ctx.flag then "text" else em("html"))"#,
         r#"fn page(ctx) => p(["text", em("html"), map(ctx.items, item)])
-fn item(x) => li(x.name)"#,
+fn item(x) => span(x.name)"#,
         r#"fn page(ctx) => p(map(pick(ctx), name))
 fn pick(ctx) => if ctx.flag then [{n: "a"}] else []
 fn name(x) => x.n"#,
@@ -715,6 +786,10 @@ fn values_validate_against_their_exact_type() -> Result<()> {
         let error = ty.validate(&value).err().ok_or("validated a wrong value")?;
         assert_eq!(error.message(), message);
     }
-    assert!(Type::Html.validate(&Value::from("text")).is_err());
+    assert!(
+        Type::Html(HtmlType::Flow)
+            .validate(&Value::from("text"))
+            .is_err()
+    );
     Ok(())
 }

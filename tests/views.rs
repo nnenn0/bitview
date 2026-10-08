@@ -1,7 +1,7 @@
 //! Renders and checks a copy of the views genbit creates for a new site, so the language is tested
 //! on a program of the size and shape it is written for.
 
-use bitview::{Html, Program, Source, Type, Value};
+use bitview::{Html, HtmlType, Program, Source, Type, Value};
 use std::{error::Error, fs, path::Path};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -343,13 +343,16 @@ fn context_type(fields: Vec<(&str, Type)>) -> Type {
         ("url", Type::String),
         ("og-image", Type::String),
     ]);
-    let mut all = vec![("site", site), ("style", Type::Html)];
+    let mut all = vec![("site", site), ("style", Type::Html(HtmlType::Metadata))];
     all.extend(fields);
     Type::record(all)
 }
 
 fn indexed_type(fields: Vec<(&str, Type)>) -> Type {
-    let mut all = vec![("canonical-url", Type::String), ("json-ld", Type::Html)];
+    let mut all = vec![
+        ("canonical-url", Type::String),
+        ("json-ld", Type::Html(HtmlType::Metadata)),
+    ];
     all.extend(fields);
     context_type(all)
 }
@@ -388,7 +391,10 @@ fn every_page_passes_the_type_check() -> Result<()> {
         ),
         (
             "page",
-            indexed_type(vec![("article", entry_type()), ("content", Type::Html)]),
+            indexed_type(vec![
+                ("article", entry_type()),
+                ("content", Type::Html(HtmlType::Flow)),
+            ]),
         ),
         ("tags", indexed_type(vec![("tags", Type::list(tag))])),
         (
