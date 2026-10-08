@@ -85,28 +85,59 @@ impl Program {
         self.function(name).map(|(_, function)| &function.span)
     }
 
-    /// Checks that `entry` renders every value of type `ctx` without a type or field error: every
+    /// Checks that each entry renders every value of its type without a type or field error: every
     /// field it may read exists, every value fits where it is used, and the result is Html. Both
     /// sides of every `if` and the function of every `map` are checked, so an error that rendering
     /// would meet only with some data is found here. Errors that depend on the values themselves,
     /// such as a URL with a disallowed scheme, remain for rendering.
     ///
+    /// A function is checked only through the calls that reach it, so a function that no entry may
+    /// call is an error: nothing could tell whether it fits the data it is meant for.
+    ///
     /// # Errors
     ///
     /// Returns the first error, with its position and the functions that were being checked.
-    pub fn check(&self, entry: &str, ctx: &Type) -> Result<(), Error> {
-        let (index, function) = self.entry(entry)?;
-        let result = check::Checker::new(&self.functions)
-            .call(index, vec![types::Ty::from(ctx)])
-            .map_err(|error| error.in_function(entry, None))?;
-        if result.is_html() {
-            Ok(())
-        } else {
-            Err(Error::at(
-                ErrorKind::Type,
+    pub fn check(&self, entries: &[(&str, Type)]) -> Result<(), Error> {
+        let mut checker = check::Checker::new(&self.functions);
+        let mut reached = vec![false; self.functions.len()];
+        for (entry, ctx) in entries {
+            let (index, function) = self.entry(entry)?;
+            let result = checker
+                .call(index, vec![types::Ty::from(ctx)])
+                .map_err(|error| error.in_function(entry, None))?;
+            if !result.is_html() {
+                return Err(Error::at(
+                    ErrorKind::Type,
+                    &function.span,
+                    format!("{entry} must return Html, but returns {result}"),
+                ));
+            }
+            for used in resolve::used_by(&self.functions, index) {
+                if let Some(reached) = reached.get_mut(used) {
+                    *reached = true;
+                }
+            }
+        }
+        match self
+            .functions
+            .iter()
+            .zip(reached)
+            .find(|(_, reached)| !reached)
+        {
+            Some((function, _)) => Err(Error::at(
+                ErrorKind::Name,
                 &function.span,
-                format!("{entry} must return Html, but returns {result}"),
-            ))
+                format!(
+                    "function {} is not called from {}, so it cannot be checked; call it or remove it",
+                    function.name,
+                    entries
+                        .iter()
+                        .map(|(entry, _)| *entry)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )),
+            None => Ok(()),
         }
     }
 

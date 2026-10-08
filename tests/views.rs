@@ -381,7 +381,7 @@ fn every_page_passes_the_type_check() -> Result<()> {
         ("url", Type::String),
         ("count", Type::String),
     ]);
-    for (entry, ctx) in [
+    let pages = [
         (
             "root",
             indexed_type(vec![("entries", Type::list(entry_type()))]),
@@ -399,10 +399,17 @@ fn every_page_passes_the_type_check() -> Result<()> {
             ]),
         ),
         ("not-found", context_type(Vec::new())),
-    ] {
-        program.check(entry, &ctx)?;
-    }
+    ];
+    program.check(&pages)?;
     let missing_date = context_type(vec![("article", Type::record([("title", Type::String)]))]);
-    assert!(program.check("page", &missing_date).is_err());
+    assert!(program.check(&[("page", missing_date)]).is_err());
+    let error = program
+        .check(&pages[1..])
+        .err()
+        .ok_or("checked without the home page")?;
+    assert_eq!(
+        error.to_string(),
+        "views/pages/root.bv:1:1: function root is not called from page, tags, tag, not-found, so it cannot be checked; call it or remove it"
+    );
     Ok(())
 }
