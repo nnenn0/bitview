@@ -115,7 +115,8 @@ impl Parser {
         })
     }
 
-    fn expr(&mut self) -> Result<Syntax, Error> {
+    /// Enters one more level of nesting. The caller restores `depth` when it leaves.
+    fn nest(&mut self) -> Result<(), Error> {
         if self.depth >= MAX_DEPTH {
             return Err(Error::at(
                 ErrorKind::Syntax,
@@ -124,12 +125,18 @@ impl Parser {
             ));
         }
         self.depth += 1;
+        Ok(())
+    }
+
+    fn expr(&mut self) -> Result<Syntax, Error> {
+        let outer = self.depth;
+        self.nest()?;
         let expr = if self.peek() == Some(&Token::If) {
             self.if_expr()
         } else {
             self.postfix()
         };
-        self.depth -= 1;
+        self.depth = outer;
         expr
     }
 
@@ -148,9 +155,11 @@ impl Parser {
         ))
     }
 
+    /// Each field read wraps the expression before it, so it counts as one level of nesting.
     fn postfix(&mut self) -> Result<Syntax, Error> {
+        let outer = self.depth;
         let mut expr = self.primary()?;
-        loop {
+        let expr = loop {
             match self.peek() {
                 Some(Token::LParen) => {
                     let Syntax::Name(name, span) = expr else {
@@ -165,13 +174,16 @@ impl Parser {
                     expr = Syntax::Call(name, args, span);
                 }
                 Some(Token::Dot) => {
+                    self.nest()?;
                     self.advance();
                     let (field, span) = self.ident("a field name")?;
                     expr = Syntax::Field(Box::new(expr), field, span);
                 }
-                _ => return Ok(expr),
+                _ => break expr,
             }
-        }
+        };
+        self.depth = outer;
+        Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Syntax, Error> {

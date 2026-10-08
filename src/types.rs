@@ -52,7 +52,7 @@ impl Type {
         )
     }
 
-    /// Whether `value` has exactly this type: records have the same fields, and every item of a
+    /// Whether `value` has exactly this type: records have the same fields, each once, and every item of a
     /// list has the item type. A host that checked its views with this type can confirm the values
     /// it renders with, so that the check holds for them.
     ///
@@ -95,6 +95,23 @@ fn validate(ty: &Type, value: &Value, path: &str) -> Result<(), Error> {
             .enumerate()
             .try_for_each(|(index, value)| validate(item, value, &format!("{path}[{index}]"))),
         (Type::Record(types), Value::Record(values)) => {
+            // Templates read the first of repeated fields, so a later one would go unchecked.
+            if let Some((name, _)) = values
+                .iter()
+                .enumerate()
+                .find(|(position, (name, _))| {
+                    values
+                        .iter()
+                        .take(*position)
+                        .any(|(earlier, _)| earlier == name)
+                })
+                .map(|(_, field)| field)
+            {
+                return Err(Error::new(
+                    ErrorKind::Field,
+                    format!("{path}.{name} is given twice"),
+                ));
+            }
             if let Some((name, _)) = values
                 .iter()
                 .find(|(name, _)| !types.iter().any(|(key, _)| key == name))

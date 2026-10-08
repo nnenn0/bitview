@@ -64,16 +64,15 @@ impl Evaluator<'_> {
     /// Paths such as `ctx.article.title` are followed by reference, so that only the value at the
     /// end is copied, not the whole argument with the article's HTML.
     fn read(&self, expr: &Expr, args: &[Value]) -> Result<Value, Error> {
-        if let Some(value) = place(expr, args)? {
+        if let Some(value) = borrow_path(expr, args)? {
             return Ok(value.clone());
         }
         let Expr::Field(record, name, span) = expr else {
             return Err(Error::new(ErrorKind::Name, "internal error: not a path"));
         };
+        // The record is built here and owned, so the field can be moved out of it.
         let record = self.eval(record, args)?;
-        field(&record, name)
-            .cloned()
-            .map_err(|error| error.with_span(span))
+        into_field(record, name).map_err(|error| error.with_span(span))
     }
 
     fn eval_all(&self, exprs: &[Expr], args: &[Value]) -> Result<Vec<Value>, Error> {
@@ -99,13 +98,13 @@ impl Evaluator<'_> {
     }
 }
 
-fn place<'v>(expr: &Expr, args: &'v [Value]) -> Result<Option<&'v Value>, Error> {
+fn borrow_path<'v>(expr: &Expr, args: &'v [Value]) -> Result<Option<&'v Value>, Error> {
     match expr {
         Expr::Param(position) => args
             .get(*position)
             .map(Some)
             .ok_or_else(|| Error::new(ErrorKind::Name, "internal error: missing argument")),
-        Expr::Field(record, name, span) => match place(record, args)? {
+        Expr::Field(record, name, span) => match borrow_path(record, args)? {
             Some(record) => field(record, name)
                 .map(Some)
                 .map_err(|error| error.with_span(span)),
@@ -117,26 +116,45 @@ fn place<'v>(expr: &Expr, args: &'v [Value]) -> Result<Option<&'v Value>, Error>
 
 fn field<'v>(record: &'v Value, name: &str) -> Result<&'v Value, Error> {
     let Value::Record(fields) = record else {
-        return Err(Error::new(
-            ErrorKind::Type,
-            format!(
-                "cannot read field {name} of a {}; only records have fields",
-                record.type_name()
-            ),
-        ));
+        return Err(not_a_record(record, name));
     };
-    if let Some((_, value)) = fields.iter().find(|(key, _)| key == name) {
-        return Ok(value);
+    fields
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value)
+        .ok_or_else(|| unknown_field(fields, name))
+}
+
+fn into_field(record: Value, name: &str) -> Result<Value, Error> {
+    let Value::Record(mut fields) = record else {
+        return Err(not_a_record(&record, name));
+    };
+    match fields.iter().position(|(key, _)| key == name) {
+        Some(position) => Ok(fields.swap_remove(position).1),
+        None => Err(unknown_field(&fields, name)),
     }
+}
+
+fn not_a_record(value: &Value, name: &str) -> Error {
+    Error::new(
+        ErrorKind::Type,
+        format!(
+            "cannot read field {name} of a {}; only records have fields",
+            value.type_name()
+        ),
+    )
+}
+
+fn unknown_field(fields: &[(String, Value)], name: &str) -> Error {
     let available = fields
         .iter()
         .map(|(key, _)| key.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    Err(Error::new(
+    Error::new(
         ErrorKind::Field,
         format!("unknown field {name:?} (fields: {available})"),
-    ))
+    )
 }
 
 fn concat(values: Vec<Value>) -> Result<Value, Error> {
@@ -159,14 +177,13 @@ fn element(spec: &'static ElementSpec, values: Vec<Value>) -> Result<Html, Error
         Some(Value::Record(fields)) => attributes(spec, fields)?,
         _ => Vec::new(),
     };
-    let values = values.collect::<Vec<_>>();
-    if spec.void && !values.is_empty() {
+    if spec.void && values.peek().is_some() {
         return Err(Error::new(
             ErrorKind::Html,
             format!("<{}> is a void element and takes no children", spec.name),
         ));
     }
-    let children = into_html(Value::List(values)).map_err(|other| {
+    let children = into_html(values).map_err(|other| {
         let hint = if matches!(other, Value::Record(_)) {
             "; attributes must be the first argument"
         } else {
@@ -204,8 +221,9 @@ fn attributes(
         .collect()
 }
 
-/// Text becomes a text node and a list a fragment, as the types allow.
-pub(crate) fn into_html(value: Value) -> Result<Html, Value> {
+/// Text becomes a text node and a list a fragment, as the types allow. Returns the first value
+/// that cannot stand for HTML.
+pub(crate) fn into_html(values: impl IntoIterator<Item = Value>) -> Result<Html, Value> {
     fn push(nodes: &mut Vec<Node>, value: Value) -> Result<(), Value> {
         match value {
             Value::String(text) => nodes.push(Node::Text(text)),
@@ -220,6 +238,8 @@ pub(crate) fn into_html(value: Value) -> Result<Html, Value> {
         Ok(())
     }
     let mut nodes = Vec::new();
-    push(&mut nodes, value)?;
+    for value in values {
+        push(&mut nodes, value)?;
+    }
     Ok(Html(nodes))
 }

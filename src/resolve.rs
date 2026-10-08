@@ -11,8 +11,15 @@ use std::collections::HashMap;
 
 pub(crate) type Index = HashMap<String, usize>;
 
+/// What a call needs to know about the function it names.
+#[derive(Clone, Copy)]
+struct Signature {
+    position: usize,
+    arity: usize,
+}
+
 pub(crate) fn resolve(defs: Vec<Def>) -> Result<(Vec<Function>, Index), Error> {
-    let mut index = Index::new();
+    let mut signatures = HashMap::new();
     for (position, def) in defs.iter().enumerate() {
         if is_builtin(&def.name) {
             return Err(Error::at(
@@ -24,8 +31,12 @@ pub(crate) fn resolve(defs: Vec<Def>) -> Result<(Vec<Function>, Index), Error> {
                 ),
             ));
         }
-        if let Some(previous) = index.insert(def.name.clone(), position) {
-            let previous = defs.get(previous).map_or_else(String::new, |def| {
+        let signature = Signature {
+            position,
+            arity: def.params.len(),
+        };
+        if let Some(previous) = signatures.insert(def.name.clone(), signature) {
+            let previous = defs.get(previous.position).map_or_else(String::new, |def| {
                 format!(" (first defined at {})", def.span)
             });
             return Err(Error::at(
@@ -35,12 +46,15 @@ pub(crate) fn resolve(defs: Vec<Def>) -> Result<(Vec<Function>, Index), Error> {
             ));
         }
     }
-    let arities = defs.iter().map(|def| def.params.len()).collect::<Vec<_>>();
     let functions = defs
         .into_iter()
-        .map(|def| resolve_function(def, &index, &arities))
+        .map(|def| resolve_function(def, &signatures))
         .collect::<Result<Vec<_>, _>>()?;
     check_recursion(&functions)?;
+    let index = signatures
+        .into_iter()
+        .map(|(name, signature)| (name, signature.position))
+        .collect();
     Ok((functions, index))
 }
 
@@ -48,7 +62,7 @@ fn is_builtin(name: &str) -> bool {
     matches!(name, "map" | "concat") || html::element_spec(name).is_some()
 }
 
-fn resolve_function(def: Def, index: &Index, arities: &[usize]) -> Result<Function, Error> {
+fn resolve_function(def: Def, signatures: &HashMap<String, Signature>) -> Result<Function, Error> {
     let mut params = Vec::with_capacity(def.params.len());
     for (name, span) in def.params {
         if params.contains(&name) {
@@ -62,8 +76,7 @@ fn resolve_function(def: Def, index: &Index, arities: &[usize]) -> Result<Functi
     }
     let scope = Scope {
         params: &params,
-        index,
-        arities,
+        signatures,
     };
     let body = scope.expr(def.body)?;
     let mut calls = Vec::new();
@@ -79,8 +92,7 @@ fn resolve_function(def: Def, index: &Index, arities: &[usize]) -> Result<Functi
 
 struct Scope<'a> {
     params: &'a [String],
-    index: &'a Index,
-    arities: &'a [usize],
+    signatures: &'a HashMap<String, Signature>,
 }
 
 impl Scope<'_> {
@@ -124,7 +136,7 @@ impl Scope<'_> {
         if let Some(position) = self.params.iter().position(|param| param == name) {
             return Ok(Expr::Param(position));
         }
-        let message = if self.index.contains_key(name) || is_builtin(name) {
+        let message = if self.signatures.contains_key(name) || is_builtin(name) {
             format!("{name} is a function; functions are not values, so call it as {name}(...)")
         } else {
             format!("unknown name {name}")
@@ -140,8 +152,7 @@ impl Scope<'_> {
                 format!("{name} is a parameter, not a function"),
             ));
         }
-        let callee = if let Some(&function) = self.index.get(name) {
-            let arity = self.arities.get(function).copied().unwrap_or_default();
+        let callee = if let Some(&Signature { position, arity }) = self.signatures.get(name) {
             if args.len() != arity {
                 return Err(Error::at(
                     ErrorKind::Arity,
@@ -152,7 +163,7 @@ impl Scope<'_> {
                     ),
                 ));
             }
-            Callee::User(function)
+            Callee::User(position)
         } else if name == "map" {
             return self.map(args, span);
         } else if name == "concat" {
@@ -190,7 +201,7 @@ impl Scope<'_> {
                 format!("{function} is a parameter, not a function"),
             ));
         }
-        let Some(&index) = self.index.get(&function) else {
+        let Some(&Signature { position, arity }) = self.signatures.get(&function) else {
             let message = if is_builtin(&function) {
                 format!("map can only apply functions defined in the templates, not {function}")
             } else {
@@ -198,7 +209,7 @@ impl Scope<'_> {
             };
             return Err(Error::at(ErrorKind::Name, &function_span, message));
         };
-        if self.arities.get(index) != Some(&1) {
+        if arity != 1 {
             return Err(Error::at(
                 ErrorKind::Arity,
                 &function_span,
@@ -207,7 +218,11 @@ impl Scope<'_> {
                 ),
             ));
         }
-        Ok(Expr::Call(Callee::Map(index), vec![self.expr(list)?], span))
+        Ok(Expr::Call(
+            Callee::Map(position),
+            vec![self.expr(list)?],
+            span,
+        ))
     }
 }
 
