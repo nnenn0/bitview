@@ -31,12 +31,6 @@ impl Parser {
         self.tokens.peek().map(|spanned| &spanned.token)
     }
 
-    fn span(&mut self) -> Span {
-        self.tokens
-            .peek()
-            .map_or_else(|| self.end.clone(), |spanned| spanned.span.clone())
-    }
-
     /// Takes the next token if it is `token`.
     fn eat(&mut self, token: &Token) -> Option<Span> {
         self.tokens
@@ -51,29 +45,29 @@ impl Parser {
             .ok_or_else(|| unexpected(expected, None, &self.end))
     }
 
-    fn unexpected(&mut self, expected: &str) -> Error {
-        let span = self.span();
-        unexpected(expected, self.peek(), &span)
-    }
-
     fn expect(&mut self, token: &Token, expected: &str) -> Result<Span, Error> {
-        self.eat(token).ok_or_else(|| self.unexpected(expected))
+        match self.next(expected)? {
+            Spanned { token: found, span } if found == *token => Ok(span),
+            Spanned { token: found, span } => Err(unexpected(expected, Some(&found), &span)),
+        }
     }
 
-    fn ident(&mut self, expected: &str) -> Result<(String, Span), Error> {
+    fn name(&mut self, expected: &str) -> Result<(String, Span), Error> {
         match self.next(expected)? {
             Spanned {
-                token: Token::Ident(name),
+                token: Token::Name(name),
                 span,
             } => Ok((name, span)),
             Spanned { token, span } => Err(unexpected(expected, Some(&token), &span)),
         }
     }
 
-    fn separated<T>(
+    /// Reads items up to `close`. A bracket left open reports where it was opened, since the end
+    /// of the file says little about which one is missing.
+    fn until<T>(
         &mut self,
         close: &Token,
-        expected: &str,
+        open: &Span,
         mut item: impl FnMut(&mut Self) -> Result<T, Error>,
     ) -> Result<Vec<T>, Error> {
         let mut items = Vec::new();
@@ -81,23 +75,34 @@ impl Parser {
             if self.eat(close).is_some() {
                 return Ok(items);
             }
-            items.push(item(self)?);
-            if self.eat(&Token::Comma).is_none() {
-                self.expect(close, expected)?;
-                return Ok(items);
+            if self.peek().is_none() {
+                return Err(Error::at(
+                    ErrorKind::Syntax,
+                    open,
+                    format!("no {close} closes this bracket"),
+                ));
             }
+            items.push(item(self)?);
         }
     }
 
     fn def(&mut self) -> Result<Def, Error> {
-        let span = self.expect(&Token::Fn, "a function definition starting with `fn`")?;
-        let (name, _) = self.ident("a function name")?;
-        self.expect(&Token::LParen, "`(`")?;
-        let params = self.separated(&Token::RParen, "`,` or `)`", |parser| {
-            parser.ident("a parameter name")
+        let expected = "a function definition, as in (defn page [ctx] ...)";
+        let span = self.expect(&Token::LParen, expected)?;
+        self.expect(&Token::Defn, expected)?;
+        let (name, _) = self.name("a function name")?;
+        let params_open = self.expect(&Token::LBracket, "`[` and the parameters")?;
+        let params = self.until(&Token::RBracket, &params_open, |parser| {
+            parser.name("a parameter name")
         })?;
-        self.expect(&Token::Arrow, "`=>`")?;
-        let body = self.expr(0)?;
+        let body = self.until(&Token::RParen, &span, |parser| parser.expr(0))?;
+        let Ok([body]) = <[Syntax; 1]>::try_from(body) else {
+            return Err(Error::at(
+                ErrorKind::Syntax,
+                &span,
+                "a function body is one expression",
+            ));
+        };
         Ok(Def {
             name,
             params,
@@ -107,11 +112,11 @@ impl Parser {
     }
 
     /// The depth one level inside `depth`.
-    fn nest(&mut self, depth: usize) -> Result<usize, Error> {
+    fn nest(depth: usize, span: &Span) -> Result<usize, Error> {
         if depth >= MAX_DEPTH {
             return Err(Error::at(
                 ErrorKind::Syntax,
-                &self.span(),
+                span,
                 format!("expressions are nested more than {MAX_DEPTH} levels deep"),
             ));
         }
@@ -120,94 +125,91 @@ impl Parser {
 
     /// `depth` is how many expressions enclose this one.
     fn expr(&mut self, depth: usize) -> Result<Syntax, Error> {
-        let depth = self.nest(depth)?;
-        if self.peek() == Some(&Token::If) {
-            self.if_expr(depth)
-        } else {
-            self.postfix(depth)
+        let expected = "an expression";
+        let Spanned { token, span } = self.next(expected)?;
+        let depth = Self::nest(depth, &span)?;
+        match token {
+            Token::Str(text) => Ok(Syntax::Str(text)),
+            Token::Name(name) => self.fields(Syntax::Name(name, span), depth),
+            Token::LBracket => {
+                let items = self.until(&Token::RBracket, &span, |parser| parser.expr(depth))?;
+                Ok(Syntax::List(items, span))
+            }
+            Token::LBrace => Ok(Syntax::Record(self.until(
+                &Token::RBrace,
+                &span,
+                |parser| parser.entry(depth),
+            )?)),
+            Token::LParen => self.form(&span, depth),
+            Token::Key(_) => Err(Error::at(
+                ErrorKind::Syntax,
+                &span,
+                "a key is written only before a value in a record, as in {:lang \"ja\"}",
+            )),
+            other => Err(unexpected(expected, Some(&other), &span)),
         }
-    }
-
-    fn if_expr(&mut self, depth: usize) -> Result<Syntax, Error> {
-        let span = self.expect(&Token::If, "`if`")?;
-        let condition = self.expr(depth)?;
-        self.expect(&Token::Then, "`then`")?;
-        let then = self.expr(depth)?;
-        self.expect(&Token::Else, "`else`")?;
-        let otherwise = self.expr(depth)?;
-        Ok(Syntax::If(
-            Box::new(condition),
-            Box::new(then),
-            Box::new(otherwise),
-            span,
-        ))
     }
 
     /// Each field read wraps the expression before it, so it counts as one level of nesting.
-    fn postfix(&mut self, mut depth: usize) -> Result<Syntax, Error> {
-        let mut expr = self.primary(depth)?;
-        loop {
-            match self.peek() {
-                Some(Token::LParen) => {
-                    let Syntax::Name(name, span) = expr else {
-                        return Err(Error::at(
-                            ErrorKind::Syntax,
-                            &self.span(),
-                            "only a function name can be called",
-                        ));
-                    };
-                    self.tokens.next();
-                    let args =
-                        self.separated(&Token::RParen, "`,` or `)`", |parser| parser.expr(depth))?;
-                    expr = Syntax::Call(name, args, span);
-                }
-                Some(Token::Dot) => {
-                    depth = self.nest(depth)?;
-                    self.tokens.next();
-                    let (field, span) = self.ident("a field name")?;
-                    expr = Syntax::Field(Box::new(expr), field, span);
-                }
-                _ => return Ok(expr),
-            }
+    fn fields(&mut self, mut expr: Syntax, mut depth: usize) -> Result<Syntax, Error> {
+        while let Some(Spanned {
+            token: Token::Field(field),
+            span,
+        }) = self
+            .tokens
+            .next_if(|spanned| matches!(spanned.token, Token::Field(_)))
+        {
+            depth = Self::nest(depth, &span)?;
+            expr = Syntax::Field(Box::new(expr), field, span);
         }
+        Ok(expr)
     }
 
-    fn primary(&mut self, depth: usize) -> Result<Syntax, Error> {
-        let expected = "an expression";
+    /// A parenthesized form: `if` or a call. `open` is the position of `(`.
+    fn form(&mut self, open: &Span, depth: usize) -> Result<Syntax, Error> {
+        let expected = "a function name or `if` after `(`";
         let Spanned { token, span } = self.next(expected)?;
         match token {
-            Token::Str(text) => Ok(Syntax::Str(text)),
-            Token::Ident(name) => Ok(Syntax::Name(name, span)),
-            Token::LBracket => {
-                let items =
-                    self.separated(&Token::RBracket, "`,` or `]`", |parser| parser.expr(depth))?;
-                Ok(Syntax::List(items, span))
+            Token::If => {
+                let args = self.until(&Token::RParen, open, |parser| parser.expr(depth))?;
+                let Ok([condition, then, otherwise]) = <[Syntax; 3]>::try_from(args) else {
+                    return Err(Error::at(
+                        ErrorKind::Syntax,
+                        &span,
+                        "if takes a condition, the value when it holds, and the value otherwise",
+                    ));
+                };
+                Ok(Syntax::If(
+                    Box::new(condition),
+                    Box::new(then),
+                    Box::new(otherwise),
+                    span,
+                ))
             }
-            Token::LBrace => Ok(Syntax::Record(self.separated(
-                &Token::RBrace,
-                "`,` or `}`",
-                |parser| parser.field(depth),
-            )?)),
-            Token::LParen => {
-                let expr = self.expr(depth)?;
-                self.expect(&Token::RParen, "`)`")?;
-                Ok(expr)
+            Token::Name(name) => {
+                if let Some(Token::Field(_)) = self.peek() {
+                    return Err(Error::at(
+                        ErrorKind::Syntax,
+                        &span,
+                        "only a function name can be called",
+                    ));
+                }
+                let args = self.until(&Token::RParen, open, |parser| parser.expr(depth))?;
+                Ok(Syntax::Call(name, args, span))
             }
             other => Err(unexpected(expected, Some(&other), &span)),
         }
     }
 
-    fn field(&mut self, depth: usize) -> Result<(String, Syntax, Span), Error> {
-        let expected = "a field name";
-        let (key, span) = match self.next(expected)? {
+    fn entry(&mut self, depth: usize) -> Result<(String, Syntax, Span), Error> {
+        let expected = "a key, as in :lang";
+        match self.next(expected)? {
             Spanned {
-                token: Token::Ident(name) | Token::Str(name),
+                token: Token::Key(key),
                 span,
-            } => (name, span),
-            Spanned { token, span } => return Err(unexpected(expected, Some(&token), &span)),
-        };
-        self.expect(&Token::Colon, "`:`")?;
-        Ok((key, self.expr(depth)?, span))
+            } => Ok((key, self.expr(depth)?, span)),
+            Spanned { token, span } => Err(unexpected(expected, Some(&token), &span)),
+        }
     }
 }
 

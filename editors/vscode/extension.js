@@ -1,8 +1,8 @@
-// Every function is defined as `fn name(params) =>`, and the .bv files of a program share one
+// Every function is defined as `(defn name [params] ...)`, and the .bv files of a program share one
 // namespace. So regular expressions over the code find definitions and references without a parser.
 
 const NAME = "[a-z][a-z0-9]*(?:-[a-z0-9]+)*";
-const DEFINITION = new RegExp(`(?<![a-z0-9.-])fn\\s+(${NAME})\\s*\\(([^)]*)\\)`, "g");
+const DEFINITION = new RegExp(`\\(\\s*defn\\s+(${NAME})\\s*\\[([^\\]]*)\\]`, "g");
 const PARAM = new RegExp(NAME, "g");
 
 /** `text` with strings and comments replaced by spaces, so that every offset stays the same. */
@@ -23,7 +23,7 @@ function codeOnly(text) {
         code += " ";
         i += 1;
       }
-    } else if (text[i] === "-" && text[i + 1] === "-") {
+    } else if (text[i] === ";") {
       while (i < text.length && text[i] !== "\n") {
         code += " ";
         i += 1;
@@ -39,8 +39,8 @@ function codeOnly(text) {
 function definitionsIn(text) {
   const found = [];
   for (const match of codeOnly(text).matchAll(DEFINITION)) {
-    const nameOffset = match.index + match[0].indexOf(match[1], 2);
-    const paramsOffset = match.index + match[0].indexOf("(") + 1;
+    const nameOffset = match.index + match[0].indexOf(match[1], match[0].indexOf("defn") + 4);
+    const paramsOffset = match.index + match[0].indexOf("[") + 1;
     const params = [...match[2].matchAll(PARAM)].map((param) => ({
       name: param[0],
       offset: paramsOffset + param.index,
@@ -52,8 +52,8 @@ function definitionsIn(text) {
 
 /** A parameter hides functions of the same name, so the enclosing function's parameters come first. */
 function symbolAt(text, definitions, wordStart, word) {
-  if (text[wordStart - 1] === ".") return null;
-  if (/^\s*:/.test(text.slice(wordStart + word.length))) return null;
+  // A field after `.` and a record key after `:` are not names.
+  if (text[wordStart - 1] === "." || text[wordStart - 1] === ":") return null;
   const enclosing = definitions.filter((definition) => definition.start <= wordStart).pop();
   const param = enclosing?.params.find((candidate) => candidate.name === word);
   if (param) return { kind: "param", scope: enclosing.start, declaration: param.offset };
@@ -170,7 +170,7 @@ function activate(context) {
       provideDocumentSymbols(document) {
         return definitionsIn(document.getText()).map((definition) => {
           const range = location(document, definition.offset, definition.name.length).range;
-          const detail = `(${definition.params.map((param) => param.name).join(", ")})`;
+          const detail = `[${definition.params.map((param) => param.name).join(" ")}]`;
           return new vscode.DocumentSymbol(definition.name, detail, vscode.SymbolKind.Function, range, range);
         });
       },

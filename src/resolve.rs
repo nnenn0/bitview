@@ -198,7 +198,7 @@ impl Scope<'_> {
             return Ok(Expr::Param(position));
         }
         let message = if self.signatures.contains_key(name) || is_builtin(name) {
-            format!("{name} is a function; functions are not values, so call it as {name}(...)")
+            format!("{name} is a function; functions are not values, so call it as ({name} ...)")
         } else {
             format!("unknown name {name}")
         };
@@ -249,7 +249,7 @@ impl Scope<'_> {
     }
 
     fn map(&self, args: Vec<Syntax>, span: Span) -> Result<Expr, Error> {
-        let usage = "map takes a list and the name of a function with one parameter, as in map(items, item-view)";
+        let usage = "map takes a list and the name of a function with one parameter, as in (map items item-view)";
         let [list, Syntax::Name(function, function_span)] =
             <[Syntax; 2]>::try_from(args).map_err(|_| Error::at(ErrorKind::Arity, &span, usage))?
         else {

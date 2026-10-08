@@ -1,11 +1,7 @@
-fn root(ctx) =>
-  layout(ctx, ctx.site.title, ctx.site.description, "website",
-    h1(ctx.site.title),
-    [
-      entry-list(ctx.entries),
-      p({class: "home-links"},
-        a({href: "/tags/"}, "tags"),
-        a({href: "/feed.xml"}, "RSS")
-      ),
-    ]
-  )
+(defn root [ctx]
+  (layout ctx ctx.site.title ctx.site.description "website"
+    (h1 ctx.site.title)
+    [(entry-list ctx.entries)
+     (p {:class "home-links"}
+       (a {:href "/tags/"} "tags")
+       (a {:href "/feed.xml"} "RSS"))]))
