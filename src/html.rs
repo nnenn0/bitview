@@ -75,8 +75,12 @@ pub(crate) fn element_spec(name: &str) -> Option<&'static ElementSpec> {
 /// keeps both far from the end of the stack, even for Markdown with thousands of nested quotes.
 const MAX_DEPTH: u16 = 256;
 
-/// Attributes whose values browsers follow as URLs.
-const URL_ATTRIBUTES: [&str; 3] = ["href", "src", "cite"];
+/// Attributes whose values browsers follow as URLs. `background` is obsolete, but browsers still load
+/// it as the image behind `body` and table cells.
+const URL_ATTRIBUTES: [&str; 4] = ["href", "src", "cite", "background"];
+/// Attributes whose values browsers read as several URLs: image candidates separated by commas, each
+/// followed by its descriptors (`srcset`, `imagesrcset`), or URLs separated by spaces (`ping`).
+const URL_LIST_ATTRIBUTES: [&str; 3] = ["srcset", "imagesrcset", "ping"];
 const URL_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +253,15 @@ pub(crate) fn build_element(
         }
         if URL_ATTRIBUTES.contains(&name.as_str()) {
             check_url(name, value)?;
+        } else if URL_LIST_ATTRIBUTES.contains(&name.as_str()) {
+            // A URL in these lists may itself contain commas, so the pieces between spaces and
+            // commas are checked instead of the URLs a browser would read. Each of those URLs starts
+            // a piece, and a scheme contains neither a space nor a comma, so no scheme is missed.
+            for piece in
+                value.split(|character: char| character.is_ascii_whitespace() || character == ',')
+            {
+                check_url(name, piece)?;
+            }
         }
     }
     Ok(Html(vec![Node::Element {
@@ -381,6 +394,38 @@ mod tests {
             "tel:+81-3-0000-0000",
         ] {
             assert!(check_url("href", rejected).is_err(), "{rejected:?}");
+        }
+    }
+
+    #[test]
+    fn every_url_in_a_list_attribute_is_checked() {
+        let image = |name: &str, value: &str| {
+            Html::element(
+                "img",
+                vec![
+                    ("src".to_owned(), "/a.png".to_owned()),
+                    (name.to_owned(), value.to_owned()),
+                ],
+                Html::default(),
+            )
+        };
+        for (name, value) in [
+            ("srcset", "/a.png 1x, https://example.com/b,c.png 2x"),
+            ("srcset", "a.png 100w,b.png 200w"),
+            ("ping", "https://example.com/p /q"),
+            ("background", "/bg.png"),
+        ] {
+            assert!(image(name, value).is_ok(), "{name}={value:?}");
+        }
+        for (name, value) in [
+            ("srcset", "/a.png 1x, data:image/png;base64,AAAA 2x"),
+            ("srcset", "/a.png 1x,javascript:x 2x"),
+            ("srcset", "/a.png,\u{1}javascript:x"),
+            ("imagesrcset", "javascript:x"),
+            ("ping", "https://example.com/p javascript:x"),
+            ("background", "javascript:x"),
+        ] {
+            assert!(image(name, value).is_err(), "{name}={value:?}");
         }
     }
 
