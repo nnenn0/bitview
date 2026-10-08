@@ -1,3 +1,4 @@
+use crate::html::ElementSpec;
 use std::{fmt, sync::Arc};
 
 /// A position in a template source, counted in characters from 1.
@@ -137,6 +138,98 @@ impl Error {
     #[must_use]
     pub fn trace(&self) -> &[Frame] {
         &self.trace
+    }
+}
+
+/// Errors that checking finds with types and rendering finds with values. Both build them here, so
+/// that a message reads the same whichever finds it. `found` is the type, or the kind of value.
+impl Error {
+    pub(crate) fn not_html(entry: &str, span: &Span, found: impl fmt::Display) -> Self {
+        Self::at(
+            ErrorKind::Type,
+            span,
+            format!("{entry} must return Html, but returns a {found}"),
+        )
+    }
+
+    pub(crate) fn not_a_condition(span: &Span, found: impl fmt::Display) -> Self {
+        Self::at(
+            ErrorKind::Type,
+            span,
+            format!("if needs a Bool condition, but got {found}"),
+        )
+    }
+
+    pub(crate) fn not_a_list(span: &Span, found: impl fmt::Display) -> Self {
+        Self::at(
+            ErrorKind::Type,
+            span,
+            format!("map needs a List, but got {found}"),
+        )
+    }
+
+    pub(crate) fn not_a_record(field: &str, found: impl fmt::Display) -> Self {
+        Self::new(
+            ErrorKind::Type,
+            format!("cannot read field {field} of a {found}; only records have fields"),
+        )
+    }
+
+    pub(crate) fn unknown_field<'a>(
+        field: &str,
+        fields: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let fields = fields.into_iter().collect::<Vec<_>>().join(", ");
+        Self::new(
+            ErrorKind::Field,
+            format!("unknown field {field:?} (fields: {fields})"),
+        )
+    }
+
+    pub(crate) fn not_a_string_to_concat(found: impl fmt::Display) -> Self {
+        Self::new(
+            ErrorKind::Type,
+            format!("concat joins Strings, but got {found}"),
+        )
+    }
+
+    pub(crate) fn not_a_string_attribute(
+        spec: &ElementSpec,
+        attribute: &str,
+        found: impl fmt::Display,
+    ) -> Self {
+        Self::new(
+            ErrorKind::Type,
+            format!(
+                "attribute {attribute} of <{}> needs a String, but got {found}",
+                spec.name
+            ),
+        )
+    }
+
+    /// `is_record` adds a hint, since a record among the children is most likely attributes
+    /// written after a child.
+    pub(crate) fn not_a_child(
+        spec: &ElementSpec,
+        found: impl fmt::Display,
+        is_record: bool,
+    ) -> Self {
+        let hint = if is_record {
+            "; attributes must be the first argument"
+        } else {
+            ""
+        };
+        Self::new(
+            ErrorKind::Type,
+            format!("a {found} cannot be a child of <{}>{hint}", spec.name),
+        )
+    }
+
+    pub(crate) fn void_with_children(spec: &ElementSpec) -> Self {
+        Self::new(
+            ErrorKind::Html,
+            format!("<{}> is a void element and takes no children", spec.name),
+        )
     }
 }
 

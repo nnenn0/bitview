@@ -72,11 +72,7 @@ impl<'a> Checker<'a> {
             Expr::If(condition, then, otherwise, span) => {
                 let condition = self.check(condition, args)?;
                 if !matches!(condition, Ty::Bool | Ty::Never) {
-                    return Err(Error::at(
-                        ErrorKind::Type,
-                        span,
-                        format!("if needs a Bool condition, but got {condition}"),
-                    ));
+                    return Err(Error::not_a_condition(span, condition));
                 }
                 let then = self.check(then, args)?;
                 let otherwise = self.check(otherwise, args)?;
@@ -109,13 +105,7 @@ impl<'a> Checker<'a> {
         let item = match types.into_iter().next() {
             Some(Ty::List(item)) => *item,
             Some(Ty::Never) => Ty::Never,
-            other => {
-                return Err(Error::at(
-                    ErrorKind::Type,
-                    span,
-                    format!("map needs a List, but got {}", other.unwrap_or(Ty::Never)),
-                ));
-            }
+            other => return Err(Error::not_a_list(span, other.unwrap_or(Ty::Never))),
         };
         let result = self.call_at(function, vec![item], span)?;
         Ok(Ty::List(Box::new(result)))
@@ -128,22 +118,9 @@ fn field(record: &Ty, name: &str) -> Result<Ty, Error> {
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
-            .ok_or_else(|| {
-                let available = fields
-                    .iter()
-                    .map(|(key, _)| key.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Error::new(
-                    ErrorKind::Field,
-                    format!("unknown field {name:?} (fields: {available})"),
-                )
-            }),
+            .ok_or_else(|| Error::unknown_field(name, fields.iter().map(|(key, _)| key.as_str()))),
         Ty::Never => Ok(Ty::Never),
-        other => Err(Error::new(
-            ErrorKind::Type,
-            format!("cannot read field {name} of a {other}; only records have fields"),
-        )),
+        other => Err(Error::not_a_record(name, other)),
     }
 }
 
@@ -152,10 +129,7 @@ fn concat(types: &[Ty]) -> Result<Ty, Error> {
         .iter()
         .find(|ty| !matches!(ty, Ty::String | Ty::Never))
     {
-        Some(other) => Err(Error::new(
-            ErrorKind::Type,
-            format!("concat joins Strings, but got {other}"),
-        )),
+        Some(other) => Err(Error::not_a_string_to_concat(other)),
         None => Ok(Ty::String),
     }
 }
@@ -166,13 +140,7 @@ fn element(spec: &ElementSpec, types: &[Ty]) -> Result<Ty, Error> {
             for (name, ty) in attrs {
                 html::check_attribute(spec, name)?;
                 if !matches!(ty, Ty::String | Ty::Never) {
-                    return Err(Error::new(
-                        ErrorKind::Type,
-                        format!(
-                            "attribute {name} of <{}> needs a String, but got {ty}",
-                            spec.name
-                        ),
-                    ));
+                    return Err(Error::not_a_string_attribute(spec, name, ty));
                 }
             }
             children
@@ -180,22 +148,15 @@ fn element(spec: &ElementSpec, types: &[Ty]) -> Result<Ty, Error> {
         _ => types,
     };
     if spec.void && !children.is_empty() {
-        return Err(Error::new(
-            ErrorKind::Html,
-            format!("<{}> is a void element and takes no children", spec.name),
-        ));
+        return Err(Error::void_with_children(spec));
     }
     let mut content = Content::default();
     for child in children {
         let Some(child_content) = child.content() else {
-            let hint = if matches!(child, Ty::Record(_)) {
-                "; attributes must be the first argument"
-            } else {
-                ""
-            };
-            return Err(Error::new(
-                ErrorKind::Type,
-                format!("a {child} cannot be a child of <{}>{hint}", spec.name),
+            return Err(Error::not_a_child(
+                spec,
+                child,
+                matches!(child, Ty::Record(_)),
             ));
         };
         content = content.union(child_content);

@@ -541,6 +541,30 @@ fn check_error(text: &str, ctx: &Type) -> Result<BitviewError> {
         .ok_or_else(|| format!("checked: {text}").into())
 }
 
+#[test]
+fn check_and_render_report_the_same_error() -> Result<()> {
+    let ctx_type = Type::record([("title", Type::String), ("flag", Type::Bool)]);
+    let ctx = Value::record([("title", Value::from("t")), ("flag", Value::from(true))]);
+    for text in [
+        "fn page(ctx) => ctx.flag",
+        "fn page(ctx) => p(if ctx.title then \"a\" else \"b\")",
+        "fn page(ctx) => p(map(ctx.flag, item))\nfn item(x) => span(x)",
+        "fn page(ctx) => p(ctx.title.name)",
+        "fn page(ctx) => p(ctx.titel)",
+        "fn page(ctx) => p(concat(ctx.title, ctx.flag))",
+        "fn page(ctx) => p({id: ctx.flag})",
+        "fn page(ctx) => p(ctx.flag)",
+        "fn page(ctx) => br(ctx.title)",
+    ] {
+        assert_eq!(
+            check_error(text, &ctx_type)?.to_string(),
+            render_error(text, ctx.clone())?.to_string(),
+            "{text}"
+        );
+    }
+    Ok(())
+}
+
 fn post_type() -> Type {
     Type::record([
         ("flag", Type::Bool),

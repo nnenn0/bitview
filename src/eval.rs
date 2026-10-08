@@ -33,11 +33,7 @@ impl Evaluator<'_> {
             Expr::If(condition, then, otherwise, span) => match self.eval(condition, args)? {
                 Value::Bool(true) => self.eval(then, args),
                 Value::Bool(false) => self.eval(otherwise, args),
-                other => Err(Error::at(
-                    ErrorKind::Type,
-                    span,
-                    format!("if needs a Bool condition, but got {}", other.type_name()),
-                )),
+                other => Err(Error::not_a_condition(span, other.type_name())),
             },
             Expr::Call(callee, call_args, span) => {
                 let values = self.eval_all(call_args, args)?;
@@ -78,13 +74,9 @@ impl Evaluator<'_> {
                 .map(|item| self.call_at(function, &[item], span))
                 .collect::<Result<_, _>>()
                 .map(Value::List),
-            other => Err(Error::at(
-                ErrorKind::Type,
+            other => Err(Error::not_a_list(
                 span,
-                format!(
-                    "map needs a List, but got {}",
-                    other.as_ref().map_or("nothing", Value::type_name)
-                ),
+                other.as_ref().map_or("nothing", Value::type_name),
             )),
         }
     }
@@ -106,55 +98,34 @@ fn borrow_path<'v>(expr: &Expr, args: &'v [Value]) -> Result<Option<&'v Value>, 
 
 fn field<'v>(record: &'v Value, name: &str) -> Result<&'v Value, Error> {
     let Value::Record(fields) = record else {
-        return Err(not_a_record(record, name));
+        return Err(Error::not_a_record(name, record.type_name()));
     };
     fields
         .iter()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value)
-        .ok_or_else(|| unknown_field(fields, name))
+        .ok_or_else(|| unknown_field(name, fields))
 }
 
 fn into_field(record: Value, name: &str) -> Result<Value, Error> {
     let Value::Record(mut fields) = record else {
-        return Err(not_a_record(&record, name));
+        return Err(Error::not_a_record(name, record.type_name()));
     };
     match fields.iter().position(|(key, _)| key == name) {
         Some(position) => Ok(fields.swap_remove(position).1),
-        None => Err(unknown_field(&fields, name)),
+        None => Err(unknown_field(name, &fields)),
     }
 }
 
-fn not_a_record(value: &Value, name: &str) -> Error {
-    Error::new(
-        ErrorKind::Type,
-        format!(
-            "cannot read field {name} of a {}; only records have fields",
-            value.type_name()
-        ),
-    )
-}
-
-fn unknown_field(fields: &[(String, Value)], name: &str) -> Error {
-    let available = fields
-        .iter()
-        .map(|(key, _)| key.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Error::new(
-        ErrorKind::Field,
-        format!("unknown field {name:?} (fields: {available})"),
-    )
+fn unknown_field(name: &str, fields: &[(String, Value)]) -> Error {
+    Error::unknown_field(name, fields.iter().map(|(key, _)| key.as_str()))
 }
 
 fn concat(values: Vec<Value>) -> Result<Value, Error> {
     let mut text = String::new();
     for value in values {
         let Value::String(part) = value else {
-            return Err(Error::new(
-                ErrorKind::Type,
-                format!("concat joins Strings, but got {}", value.type_name()),
-            ));
+            return Err(Error::not_a_string_to_concat(value.type_name()));
         };
         text.push_str(&part);
     }
@@ -168,25 +139,10 @@ fn element(spec: &'static ElementSpec, values: Vec<Value>) -> Result<Html, Error
         _ => Vec::new(),
     };
     if spec.void && values.peek().is_some() {
-        return Err(Error::new(
-            ErrorKind::Html,
-            format!("<{}> is a void element and takes no children", spec.name),
-        ));
+        return Err(Error::void_with_children(spec));
     }
     let children = into_html(values).map_err(|other| {
-        let hint = if matches!(other, Value::Record(_)) {
-            "; attributes must be the first argument"
-        } else {
-            ""
-        };
-        Error::new(
-            ErrorKind::Type,
-            format!(
-                "a {} cannot be a child of <{}>{hint}",
-                other.type_name(),
-                spec.name
-            ),
-        )
+        Error::not_a_child(spec, other.type_name(), matches!(other, Value::Record(_)))
     })?;
     html::build_element(spec, attrs, children)
 }
@@ -199,13 +155,10 @@ fn attributes(
         .into_iter()
         .map(|(name, value)| match value {
             Value::String(text) => Ok((name, text)),
-            other => Err(Error::new(
-                ErrorKind::Type,
-                format!(
-                    "attribute {name} of <{}> needs a String, but got {}",
-                    spec.name,
-                    other.type_name()
-                ),
+            other => Err(Error::not_a_string_attribute(
+                spec,
+                &name,
+                other.type_name(),
             )),
         })
         .collect()

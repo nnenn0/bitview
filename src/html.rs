@@ -347,10 +347,7 @@ pub(crate) fn build_element(
         ));
     }
     if spec.void && !children.is_empty() {
-        return Err(Error::new(
-            ErrorKind::Html,
-            format!("<{}> is a void element and cannot have children", spec.name),
-        ));
+        return Err(Error::void_with_children(spec));
     }
     for (position, (name, value)) in attrs.iter().enumerate() {
         check_attribute(spec, name)?;
