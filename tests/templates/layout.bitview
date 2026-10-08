@@ -1,0 +1,49 @@
+fn document(ctx, page-title, metadata, header-content, main-content) =>
+  html({lang: "ja"},
+    head(
+      meta({charset: "utf-8"}),
+      meta({name: "viewport", content: "width=device-width, initial-scale=1"}),
+      meta({name: "color-scheme", content: "light dark"}),
+      link({rel: "icon", href: "/assets/site/favicon.png", type: "image/png", sizes: "96x96"}),
+      link({rel: "icon", href: "/assets/site/favicon.svg", type: "image/svg+xml"}),
+      link({rel: "alternate", type: "application/rss+xml", title: ctx.site.title, href: "/feed.xml"}),
+      title(page-title),
+      metadata,
+      ctx.style
+    ),
+    body(
+      header(header-content),
+      main(main-content)
+    )
+  )
+
+fn layout(ctx, page-title, og-type, header-content, main-content) =>
+  document(ctx, page-title, seo(ctx, page-title, og-type), header-content, main-content)
+
+fn seo(ctx, page-title, og-type) => [
+  meta({name: "description", content: ctx.description}),
+  link({rel: "canonical", href: ctx.canonical-url}),
+  meta({property: "og:title", content: page-title}),
+  meta({property: "og:description", content: ctx.description}),
+  meta({property: "og:type", content: og-type}),
+  meta({property: "og:url", content: ctx.canonical-url}),
+  meta({property: "og:site_name", content: ctx.site.title}),
+  meta({property: "og:image", content: ctx.site.og-image}),
+  meta({property: "og:image:alt", content: ctx.site.title}),
+  ctx.json-ld,
+]
+
+fn home-link(ctx) => a({href: "/"}, ctx.site.title)
+
+fn timestamp(stamp) => time({datetime: stamp.datetime}, stamp.date)
+
+fn draft-badge(entry) =>
+  if entry.draft then span({class: "draft-badge"}, "draft") else []
+
+fn entry-list(entries) => ul({class: "unmarked-list"}, map(entries, entry-item))
+
+fn entry-item(entry) =>
+  li(
+    a({href: entry.url}, entry.title),
+    span({class: "entry-meta"}, timestamp(entry.created-at), draft-badge(entry))
+  )

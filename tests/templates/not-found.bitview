@@ -1,0 +1,6 @@
+fn not-found(ctx) =>
+  document(ctx, concat("404 | ", ctx.site.title),
+    meta({name: "robots", content: "noindex"}),
+    home-link(ctx),
+    [h1("404"), p("Not Found")]
+  )
