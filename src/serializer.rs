@@ -76,16 +76,23 @@ fn write_nodes(output: &mut String, nodes: &[Node]) {
 }
 
 /// Attribute values are always double-quoted, so one escaping serves them and element content.
+/// The text between the characters to escape is copied in one piece.
 fn escape(output: &mut String, text: &str) {
-    for character in text.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '"' => output.push_str("&quot;"),
-            '\'' => output.push_str("&#39;"),
-            other => output.push(other),
-        }
+    for piece in text.split_inclusive(['&', '<', '>', '"', '\'']) {
+        let mut characters = piece.chars();
+        let entity = match characters.next_back() {
+            Some('&') => "&amp;",
+            Some('<') => "&lt;",
+            Some('>') => "&gt;",
+            Some('"') => "&quot;",
+            Some('\'') => "&#39;",
+            _ => {
+                output.push_str(piece);
+                continue;
+            }
+        };
+        output.push_str(characters.as_str());
+        output.push_str(entity);
     }
 }
 
@@ -107,6 +114,8 @@ mod tests {
             html.to_fragment(),
             "<a href=\"/?a=1&amp;b=&quot;2&quot;\" title=\"&#39;&lt;x&gt;&#39;\">&lt;script&gt;alert(&#39;&amp;&#39;)&lt;/script&gt;</a>"
         );
+        assert_eq!(Html::text("日本&&語").to_fragment(), "日本&amp;&amp;語");
+        assert_eq!(Html::text("no entities").to_fragment(), "no entities");
         Ok(())
     }
 

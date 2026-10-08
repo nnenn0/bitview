@@ -465,14 +465,7 @@ pub(crate) fn check_attribute(spec: &ElementSpec, name: &str) -> Result<(), Erro
 /// characters and spaces and remove tabs and newlines before reading the scheme, so this does the
 /// same to see the scheme the browser would see.
 fn check_url(attribute: &str, value: &str) -> Result<(), Error> {
-    let url = value
-        .trim_matches(|character: char| character <= ' ')
-        .chars()
-        .filter(|character| !matches!(character, '\t' | '\n' | '\r'))
-        .collect::<String>();
-    let before_path = url.split(['/', '?', '#']).next().unwrap_or_default();
-    if let Some((scheme, _)) = before_path.split_once(':')
-        && is_scheme(scheme)
+    if let Some(scheme) = scheme(value)
         && !URL_SCHEMES
             .iter()
             .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
@@ -488,14 +481,30 @@ fn check_url(attribute: &str, value: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn is_scheme(text: &str) -> bool {
-    let mut characters = text.chars();
-    characters
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic())
-        && characters.all(|character| {
+/// The scheme of `value`, or `None` for a relative URL. A scheme is a letter followed by letters,
+/// digits, `+`, `-`, and `.`, ending at the first `:`, so reading stops at the first character
+/// that cannot be part of one.
+fn scheme(value: &str) -> Option<String> {
+    let mut scheme = String::new();
+    for character in value
+        .trim_matches(|character: char| character <= ' ')
+        .chars()
+        .filter(|character| !matches!(character, '\t' | '\n' | '\r'))
+    {
+        if character == ':' && !scheme.is_empty() {
+            return Some(scheme);
+        }
+        let continues = if scheme.is_empty() {
+            character.is_ascii_alphabetic()
+        } else {
             character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
-        })
+        };
+        if !continues {
+            return None;
+        }
+        scheme.push(character);
+    }
+    None
 }
 
 fn raw_text(kind: RawText, text: String) -> Result<Html, Error> {
