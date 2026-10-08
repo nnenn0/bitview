@@ -346,7 +346,7 @@ impl RawText {
 
 #[cfg(test)]
 mod tests {
-    use super::{Html, check_url};
+    use super::{ELEMENTS, Html, check_url};
     use crate::error::Error;
 
     #[test]
@@ -456,5 +456,23 @@ mod tests {
         let beside = [Html::text("x"), html].into_iter().collect::<Html>();
         assert!(Html::element("p", Vec::new(), beside).is_err());
         Ok(())
+    }
+
+    /// The VS Code grammar lists the element functions to color them as tags. It lives in this
+    /// repository so that both change together; this keeps them from drifting apart.
+    #[test]
+    fn the_vs_code_grammar_highlights_exactly_the_elements() {
+        let grammar = include_str!("../editors/vscode/syntaxes/bitview.tmLanguage.json");
+        let mut highlighted = grammar
+            .split("(?<![a-z0-9.-])(")
+            .skip(1)
+            .filter_map(|rest| rest.split_once(')').map(|(group, _)| group))
+            .find(|group| group.split('|').any(|name| name == "html"))
+            .map(|group| group.split('|').collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut elements = ELEMENTS.iter().map(|spec| spec.name).collect::<Vec<_>>();
+        highlighted.sort_unstable();
+        elements.sort_unstable();
+        assert_eq!(highlighted, elements);
     }
 }

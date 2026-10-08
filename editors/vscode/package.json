@@ -1,0 +1,59 @@
+{
+  "name": "bitview",
+  "displayName": "bitview",
+  "description": "Syntax highlighting, go to definition, and references for bitview templates",
+  "version": "0.2.0",
+  "publisher": "nnenn0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nnenn0/bitview"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "files": [
+    "extension.js",
+    "language-configuration.json",
+    "syntaxes/",
+    "icons/"
+  ],
+  "activationEvents": [
+    "onLanguage:bitview"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "bitview",
+        "aliases": [
+          "bitview"
+        ],
+        "extensions": [
+          ".bitview"
+        ],
+        "icon": {
+          "light": "./icons/bitview.svg",
+          "dark": "./icons/bitview.svg"
+        },
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bitview",
+        "scopeName": "source.bitview",
+        "path": "./syntaxes/bitview.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[bitview]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      }
+    }
+  }
+}
