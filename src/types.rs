@@ -193,6 +193,8 @@ impl fmt::Display for Ty {
             Self::String => formatter.write_str("String"),
             Self::Bool => formatter.write_str("Bool"),
             Self::Html(_) => formatter.write_str("Html"),
+            // An empty list literal is also the empty fragment, so it is shown as written.
+            Self::List(item) if **item == Self::Never => formatter.write_str("[]"),
             Self::List(item) => write!(formatter, "List of {item}"),
             Self::Record(fields) => {
                 let names = fields

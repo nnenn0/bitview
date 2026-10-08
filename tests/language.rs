@@ -687,6 +687,10 @@ fn name(x) => x.n"#,
             "the two sides of if have different types: Bool and String",
         ),
         (
+            "fn page(ctx) => p(if ctx.flag then ctx.flag else [])",
+            "the two sides of if have different types: Bool and []",
+        ),
+        (
             r#"fn page(ctx) => p(map([{a: "x"}, {b: "y"}], f))
 fn f(x) => x.a"#,
             "the items of a list have different types: Record {a} and Record {b}",
