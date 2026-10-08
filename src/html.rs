@@ -2,6 +2,7 @@
 //! only `serializer` turns it into text.
 
 use crate::{
+    content::{self, Category, Content, FLOW, PHRASING},
     error::{Error, ErrorKind},
     serializer,
 };
@@ -12,6 +13,8 @@ pub(crate) struct ElementSpec {
     pub(crate) void: bool,
     /// The attributes this element takes besides [`GLOBAL_ATTRIBUTES`], `data-*`, and `aria-*`.
     attributes: &'static [&'static str],
+    category: Category,
+    holds: &'static [Category],
 }
 
 const fn normal(name: &'static str) -> ElementSpec {
@@ -19,6 +22,8 @@ const fn normal(name: &'static str) -> ElementSpec {
         name,
         void: false,
         attributes: &[],
+        category: Category::Flow,
+        holds: FLOW,
     }
 }
 
@@ -27,12 +32,22 @@ const fn void(name: &'static str) -> ElementSpec {
         name,
         void: true,
         attributes: &[],
+        category: Category::Phrasing,
+        holds: &[],
     }
 }
 
 impl ElementSpec {
     const fn takes(self, attributes: &'static [&'static str]) -> Self {
         Self { attributes, ..self }
+    }
+
+    const fn is(self, category: Category) -> Self {
+        Self { category, ..self }
+    }
+
+    const fn holds(self, holds: &'static [Category]) -> Self {
+        Self { holds, ..self }
     }
 }
 
@@ -55,12 +70,20 @@ const GLOBAL_ATTRIBUTES: [&str; 9] = [
 /// page resolves URLs (`script`, `iframe`, `form`, `base`, ...) are left out on purpose; `<style>`
 /// and JSON data come only from [`Html::style`] and [`Html::json`].
 const ELEMENTS: &[ElementSpec] = &[
-    normal("html"),
-    normal("head"),
-    normal("body"),
-    normal("title"),
-    void("meta").takes(&["name", "content", "charset", "property", "media"]),
-    void("link").takes(&[
+    normal("html")
+        .is(Category::Document)
+        .holds(&[Category::Head, Category::Body]),
+    normal("head")
+        .is(Category::Head)
+        .holds(&[Category::Metadata]),
+    normal("body").is(Category::Body),
+    normal("title")
+        .is(Category::Metadata)
+        .holds(&[Category::Text]),
+    void("meta")
+        .is(Category::Metadata)
+        .takes(&["name", "content", "charset", "property", "media"]),
+    void("link").is(Category::Metadata).takes(&[
         "rel",
         "href",
         "type",
@@ -78,24 +101,26 @@ const ELEMENTS: &[ElementSpec] = &[
     normal("section"),
     normal("article"),
     normal("aside"),
-    normal("h1"),
-    normal("h2"),
-    normal("h3"),
-    normal("h4"),
-    normal("h5"),
-    normal("h6"),
-    normal("p"),
+    normal("h1").holds(PHRASING),
+    normal("h2").holds(PHRASING),
+    normal("h3").holds(PHRASING),
+    normal("h4").holds(PHRASING),
+    normal("h5").holds(PHRASING),
+    normal("h6").holds(PHRASING),
+    normal("p").holds(PHRASING),
     normal("div"),
-    normal("ul"),
-    normal("ol").takes(&["start", "reversed", "type"]),
-    normal("li").takes(&["value"]),
-    normal("dl"),
-    normal("dt"),
-    normal("dd"),
+    normal("ul").holds(&[Category::ListItem]),
+    normal("ol")
+        .holds(&[Category::ListItem])
+        .takes(&["start", "reversed", "type"]),
+    normal("li").is(Category::ListItem).takes(&["value"]),
+    normal("dl").holds(&[Category::DescriptionPart]),
+    normal("dt").is(Category::DescriptionPart),
+    normal("dd").is(Category::DescriptionPart),
     normal("blockquote").takes(&["cite"]),
-    normal("pre"),
-    void("hr"),
-    normal("a").takes(&[
+    normal("pre").holds(PHRASING),
+    void("hr").is(Category::Flow),
+    normal("a").is(Category::Phrasing).takes(&[
         "href",
         "target",
         "rel",
@@ -105,11 +130,14 @@ const ELEMENTS: &[ElementSpec] = &[
         "ping",
         "referrerpolicy",
     ]),
-    normal("span"),
-    normal("time").takes(&["datetime"]),
-    normal("strong"),
-    normal("em"),
-    normal("code"),
+    normal("span").is(Category::Phrasing).holds(PHRASING),
+    normal("time")
+        .is(Category::Phrasing)
+        .holds(PHRASING)
+        .takes(&["datetime"]),
+    normal("strong").is(Category::Phrasing).holds(PHRASING),
+    normal("em").is(Category::Phrasing).holds(PHRASING),
+    normal("code").is(Category::Phrasing).holds(PHRASING),
     void("br"),
     void("img").takes(&[
         "src",
@@ -122,12 +150,20 @@ const ELEMENTS: &[ElementSpec] = &[
         "sizes",
         "referrerpolicy",
     ]),
-    normal("table"),
-    normal("thead"),
-    normal("tbody"),
-    normal("tr"),
-    normal("th").takes(&["colspan", "rowspan", "scope", "abbr"]),
-    normal("td").takes(&["colspan", "rowspan"]),
+    normal("table").holds(&[Category::TableSection, Category::Row]),
+    normal("thead")
+        .is(Category::TableSection)
+        .holds(&[Category::Row]),
+    normal("tbody")
+        .is(Category::TableSection)
+        .holds(&[Category::Row]),
+    normal("tr").is(Category::Row).holds(&[Category::Cell]),
+    normal("th")
+        .is(Category::Cell)
+        .takes(&["colspan", "rowspan", "scope", "abbr"]),
+    normal("td")
+        .is(Category::Cell)
+        .takes(&["colspan", "rowspan"]),
 ];
 
 pub(crate) fn element_spec(name: &str) -> Option<&'static ElementSpec> {
@@ -160,6 +196,8 @@ pub(crate) enum Node {
         children: Vec<Node>,
         /// Kept on each element so that checking the depth never walks the tree again.
         depth: u16,
+        /// Kept for the same reason as `depth`, when the element becomes a child.
+        content: Content,
     },
     RawText {
         kind: RawText,
@@ -182,9 +220,11 @@ impl Html {
     ///
     /// # Errors
     ///
-    /// Fails if `name` is not in the element table, an attribute name is invalid, repeated, `style`,
-    /// or starts with `on`, a URL attribute has a scheme other than http, https, or mailto, a void
-    /// element has children, or elements would nest more than 256 levels deep.
+    /// Fails if `name` is not in the element table, an attribute is not one the element takes, is
+    /// repeated, is `style`, or starts with `on`, a URL attribute has a scheme other than http,
+    /// https, or mailto, a void element has children, `children` holds content the element cannot
+    /// contain (such as a `<div>` in a `<p>` or a link in a link), or elements would nest more than
+    /// 256 levels deep.
     pub fn element(
         name: &str,
         attrs: Vec<(String, String)>,
@@ -238,6 +278,17 @@ impl Html {
             },
             json.into(),
         )
+    }
+
+    pub(crate) fn content(&self) -> Content {
+        self.0
+            .iter()
+            .map(|node| match node {
+                Node::Text(_) => Content::of(Category::Text),
+                Node::Element { content, .. } => *content,
+                Node::RawText { .. } => Content::of(Category::Metadata),
+            })
+            .fold(Content::default(), Content::union)
     }
 
     fn depth(&self) -> u16 {
@@ -326,12 +377,18 @@ pub(crate) fn build_element(
             }
         }
     }
+    let content = place(spec, children.content())?;
     Ok(Html(vec![Node::Element {
         spec,
         attrs,
         children: children.0,
         depth,
+        content,
     }]))
+}
+
+pub(crate) fn place(spec: &ElementSpec, children: Content) -> Result<Content, Error> {
+    content::place(spec.name, spec.category, spec.holds, children)
 }
 
 pub(crate) fn check_attribute(spec: &ElementSpec, name: &str) -> Result<(), Error> {

@@ -1,5 +1,6 @@
 use crate::{
     Value,
+    content::{Category, Content, FLOW, PHRASING},
     error::{Error, ErrorKind},
 };
 use std::fmt;
@@ -9,9 +10,30 @@ use std::fmt;
 pub enum Type {
     String,
     Bool,
-    Html,
+    Html(HtmlType),
     List(Box<Type>),
     Record(Vec<(String, Type)>),
+}
+
+/// Where HTML that a host passes may go, so that templates can be checked to place it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HtmlType {
+    /// Text and elements that go in a `<body>`, such as paragraphs, lists, and links.
+    Flow,
+    /// Text and elements that go in a line of text, such as `<span>`, `<a>`, and `<em>`.
+    Phrasing,
+    /// Elements that go in a `<head>`, such as `<meta>`, styles, and JSON.
+    Metadata,
+}
+
+impl HtmlType {
+    fn content(self) -> Content {
+        match self {
+            Self::Flow => Content::any_of(FLOW),
+            Self::Phrasing => Content::any_of(PHRASING),
+            Self::Metadata => Content::any_of(&[Category::Metadata]),
+        }
+    }
 }
 
 impl Type {
@@ -54,9 +76,20 @@ fn validate(ty: &Type, value: &Value, path: &str) -> Result<(), Error> {
         )
     };
     match (ty, value) {
-        (Type::String, Value::String(_))
-        | (Type::Bool, Value::Bool(_))
-        | (Type::Html, Value::Html(_)) => Ok(()),
+        (Type::String, Value::String(_)) | (Type::Bool, Value::Bool(_)) => Ok(()),
+        (Type::Html(html), Value::Html(value)) => {
+            if value.content().fits(html.content()) {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::Type,
+                    format!(
+                        "{path} is Html with {}, but the type is {html:?} Html",
+                        value.content().description()
+                    ),
+                ))
+            }
+        }
         (Type::List(item), Value::List(items)) => items
             .iter()
             .enumerate()
@@ -93,7 +126,7 @@ pub(crate) enum Ty {
     Never,
     String,
     Bool,
-    Html,
+    Html(Content),
     List(Box<Ty>),
     Record(Vec<(String, Ty)>),
 }
@@ -103,7 +136,7 @@ impl From<&Type> for Ty {
         match value {
             Type::String => Self::String,
             Type::Bool => Self::Bool,
-            Type::Html => Self::Html,
+            Type::Html(html) => Self::Html(html.content()),
             Type::List(item) => Self::List(Box::new(Self::from(item.as_ref()))),
             Type::Record(fields) => Self::Record(
                 fields
@@ -133,17 +166,23 @@ impl Ty {
                 .map(Self::Record),
             _ => None,
         };
-        structural.or_else(|| (self.is_html() && other.is_html()).then_some(Self::Html))
+        structural.or_else(|| Some(Self::Html(self.content()?.union(other.content()?))))
     }
 
-    /// Whether values of this type can stand for HTML: text becomes a text node, and a list of
-    /// HTML becomes a fragment.
-    pub(crate) fn is_html(&self) -> bool {
+    /// What values of this type are when they stand for HTML: text becomes a text node, and a
+    /// list of HTML becomes a fragment. `None` if they cannot stand for HTML.
+    pub(crate) fn content(&self) -> Option<Content> {
         match self {
-            Self::Never | Self::String | Self::Html => true,
-            Self::List(item) => item.is_html(),
-            Self::Bool | Self::Record(_) => false,
+            Self::Never => Some(Content::default()),
+            Self::String => Some(Content::of(Category::Text)),
+            Self::Html(content) => Some(*content),
+            Self::List(item) => item.content(),
+            Self::Bool | Self::Record(_) => None,
         }
+    }
+
+    pub(crate) fn is_html(&self) -> bool {
+        self.content().is_some()
     }
 }
 
@@ -153,7 +192,7 @@ impl fmt::Display for Ty {
             Self::Never => formatter.write_str("nothing"),
             Self::String => formatter.write_str("String"),
             Self::Bool => formatter.write_str("Bool"),
-            Self::Html => formatter.write_str("Html"),
+            Self::Html(_) => formatter.write_str("Html"),
             Self::List(item) => write!(formatter, "List of {item}"),
             Self::Record(fields) => {
                 let names = fields
