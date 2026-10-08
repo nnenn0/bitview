@@ -688,9 +688,9 @@ mod tests {
     #[test]
     fn the_vs_code_grammar_highlights_exactly_the_elements() {
         let grammar = include_str!("../editors/vscode/syntaxes/bitview.tmLanguage.json");
+        // The element names are the one parenthesized alternation that includes `html`.
         let mut highlighted = grammar
-            .split("(?<![a-z0-9.-])(")
-            .skip(1)
+            .split('(')
             .filter_map(|rest| rest.split_once(')').map(|(group, _)| group))
             .find(|group| group.split('|').any(|name| name == "html"))
             .map(|group| group.split('|').collect::<Vec<_>>())
