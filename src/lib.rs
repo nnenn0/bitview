@@ -40,8 +40,8 @@ pub use types::{HtmlType, Type};
 pub use value::Value;
 
 use ast::Function;
-use resolve::Index;
-use std::sync::Arc;
+use resolve::{FunctionId, Functions};
+use std::{collections::HashSet, sync::Arc};
 
 /// A template source and the name errors use for it, such as `views/pages/page.bv`.
 #[derive(Debug, Clone, Copy)]
@@ -52,8 +52,7 @@ pub struct Source<'a> {
 
 /// Parsed and checked functions from all sources, sharing one namespace.
 pub struct Program {
-    functions: Vec<Function>,
-    index: Index,
+    functions: Functions,
 }
 
 impl Program {
@@ -68,22 +67,23 @@ impl Program {
             let name: Arc<str> = Arc::from(source.name);
             defs.extend(parser::parse(lexer::tokenize(&name, source.text)?)?);
         }
-        let (functions, index) = resolve::resolve(defs)?;
-        Ok(Self { functions, index })
+        Ok(Self {
+            functions: resolve::resolve(defs)?,
+        })
     }
 
     /// Whether `name` is a function with one parameter, which [`Program::render`] can call.
     #[must_use]
     pub fn has_entry(&self, name: &str) -> bool {
         self.function(name)
-            .is_some_and(|(_, function)| function.arity == 1)
+            .is_some_and(|function| function.arity == 1)
     }
 
     /// Where the function `name` is defined, which lets a host tie functions to the files that
     /// define them.
     #[must_use]
     pub fn defined_at(&self, name: &str) -> Option<&Span> {
-        self.function(name).map(|(_, function)| &function.span)
+        self.function(name).map(|function| &function.span)
     }
 
     /// Checks that each entry renders every value of its type without a type or field error: every
@@ -100,11 +100,11 @@ impl Program {
     /// Returns the first error, with its position and the functions that were being checked.
     pub fn check(&self, entries: &[(&str, Type)]) -> Result<(), Error> {
         let mut checker = check::Checker::new(&self.functions);
-        let mut reached = vec![false; self.functions.len()];
+        let mut reached = HashSet::new();
         for (entry, ctx) in entries {
-            let (index, function) = self.entry(entry)?;
+            let (id, function) = self.entry(entry)?;
             let result = checker
-                .call(index, vec![types::Ty::from(ctx)])
+                .call(id, vec![types::Ty::from(ctx)])
                 .map_err(|error| error.in_function(entry, None))?;
             if !result.is_html() {
                 return Err(Error::at(
@@ -113,19 +113,10 @@ impl Program {
                     format!("{entry} must return Html, but returns {result}"),
                 ));
             }
-            for used in resolve::used_by(&self.functions, index) {
-                if let Some(reached) = reached.get_mut(used) {
-                    *reached = true;
-                }
-            }
+            reached.extend(self.functions.used_by(id));
         }
-        match self
-            .functions
-            .iter()
-            .zip(reached)
-            .find(|(_, reached)| !reached)
-        {
-            Some((function, _)) => Err(Error::at(
+        match self.functions.iter().find(|(id, _)| !reached.contains(id)) {
+            Some((_, function)) => Err(Error::at(
                 ErrorKind::Name,
                 &function.span,
                 format!(
@@ -150,12 +141,12 @@ impl Program {
     /// function returns something that does not stand for HTML. Evaluation errors carry the
     /// functions that were running.
     pub fn render(&self, entry: &str, ctx: Value) -> Result<Html, Error> {
-        let (index, function) = self.entry(entry)?;
+        let (id, function) = self.entry(entry)?;
         let evaluator = eval::Evaluator {
             functions: &self.functions,
         };
         let result = evaluator
-            .call(index, &[ctx])
+            .call(id, &[ctx])
             .map_err(|error| error.in_function(entry, None))?;
         eval::into_html([result]).map_err(|other| {
             Error::at(
@@ -169,13 +160,14 @@ impl Program {
         })
     }
 
-    fn entry(&self, name: &str) -> Result<(usize, &Function), Error> {
-        let (index, function) = self.function(name).ok_or_else(|| {
+    fn entry(&self, name: &str) -> Result<(FunctionId, &Function), Error> {
+        let id = self.functions.find(name).ok_or_else(|| {
             Error::new(
                 ErrorKind::Name,
                 format!("the templates define no function {name}"),
             )
         })?;
+        let function = self.functions.get(id);
         if function.arity != 1 {
             return Err(Error::at(
                 ErrorKind::Arity,
@@ -183,7 +175,7 @@ impl Program {
                 format!("{name} must take exactly one parameter to render a page"),
             ));
         }
-        Ok((index, function))
+        Ok((id, function))
     }
 
     /// The functions that rendering `entry` may call, including `entry` itself. Each function
@@ -195,18 +187,17 @@ impl Program {
     /// in an order where the callers come last.
     #[must_use]
     pub fn functions_used_by(&self, entry: &str) -> Option<Vec<&str>> {
-        let (index, _) = self.function(entry)?;
+        let entry = self.functions.find(entry)?;
         Some(
-            resolve::used_by(&self.functions, index)
+            self.functions
+                .used_by(entry)
                 .into_iter()
-                .filter_map(|function| self.functions.get(function))
-                .map(|function| function.name.as_str())
+                .map(|id| self.functions.get(id).name.as_str())
                 .collect(),
         )
     }
 
-    fn function(&self, name: &str) -> Option<(usize, &Function)> {
-        let index = *self.index.get(name)?;
-        Some((index, self.functions.get(index)?))
+    fn function(&self, name: &str) -> Option<&Function> {
+        self.functions.find(name).map(|id| self.functions.get(id))
     }
 }

@@ -1,31 +1,23 @@
 use crate::{
     Html, Value,
-    ast::{Callee, Expr, Function},
+    ast::{Callee, Expr},
     error::{Error, ErrorKind, Span},
     html::{self, ElementSpec, Node},
+    resolve::{FunctionId, Functions},
 };
 
 pub(crate) struct Evaluator<'a> {
-    pub(crate) functions: &'a [Function],
+    pub(crate) functions: &'a Functions,
 }
 
 impl Evaluator<'_> {
-    pub(crate) fn call(&self, function: usize, args: &[Value]) -> Result<Value, Error> {
-        let function = self
-            .functions
-            .get(function)
-            .ok_or_else(|| Error::new(ErrorKind::Name, "internal error: unknown function"))?;
-        self.eval(&function.body, args)
+    pub(crate) fn call(&self, function: FunctionId, args: &[Value]) -> Result<Value, Error> {
+        self.eval(&self.functions.get(function).body, args)
     }
 
-    fn call_at(&self, function: usize, args: &[Value], site: &Span) -> Result<Value, Error> {
-        self.call(function, args).map_err(|error| {
-            let name = self
-                .functions
-                .get(function)
-                .map_or("?", |function| function.name.as_str());
-            error.in_function(name, Some(site))
-        })
+    fn call_at(&self, function: FunctionId, args: &[Value], site: &Span) -> Result<Value, Error> {
+        self.call(function, args)
+            .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
     }
 
     fn eval(&self, expr: &Expr, args: &[Value]) -> Result<Value, Error> {
@@ -79,7 +71,7 @@ impl Evaluator<'_> {
         exprs.iter().map(|expr| self.eval(expr, args)).collect()
     }
 
-    fn map(&self, function: usize, values: Vec<Value>, span: &Span) -> Result<Value, Error> {
+    fn map(&self, function: FunctionId, values: Vec<Value>, span: &Span) -> Result<Value, Error> {
         match values.into_iter().next() {
             Some(Value::List(items)) => items
                 .into_iter()
@@ -100,10 +92,8 @@ impl Evaluator<'_> {
 
 fn borrow_path<'v>(expr: &Expr, args: &'v [Value]) -> Result<Option<&'v Value>, Error> {
     match expr {
-        Expr::Param(position) => args
-            .get(*position)
-            .map(Some)
-            .ok_or_else(|| Error::new(ErrorKind::Name, "internal error: missing argument")),
+        #[expect(clippy::indexing_slicing, reason = "every call passes every argument")]
+        Expr::Param(position) => Ok(Some(&args[*position])),
         Expr::Field(record, name, span) => match borrow_path(record, args)? {
             Some(record) => field(record, name)
                 .map(Some)

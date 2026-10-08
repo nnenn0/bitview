@@ -3,60 +3,50 @@
 //! that rendering would meet only with some data.
 
 use crate::{
-    ast::{Callee, Expr, Function},
+    ast::{Callee, Expr},
     content::Content,
     error::{Error, ErrorKind, Span},
     html::{self, ElementSpec},
+    resolve::{FunctionId, Functions},
     types::Ty,
 };
 use std::collections::HashMap;
 
 pub(crate) struct Checker<'a> {
-    functions: &'a [Function],
+    functions: &'a Functions,
     /// A function called again with the same argument types has the same result.
-    checked: HashMap<(usize, Vec<Ty>), Ty>,
+    checked: HashMap<(FunctionId, Vec<Ty>), Ty>,
 }
 
 impl<'a> Checker<'a> {
-    pub(crate) fn new(functions: &'a [Function]) -> Self {
+    pub(crate) fn new(functions: &'a Functions) -> Self {
         Self {
             functions,
             checked: HashMap::new(),
         }
     }
 
-    pub(crate) fn call(&mut self, function: usize, args: Vec<Ty>) -> Result<Ty, Error> {
+    pub(crate) fn call(&mut self, function: FunctionId, args: Vec<Ty>) -> Result<Ty, Error> {
         let key = (function, args);
         if let Some(result) = self.checked.get(&key) {
             return Ok(result.clone());
         }
         let functions = self.functions;
-        let body = &functions
-            .get(function)
-            .ok_or_else(|| Error::new(ErrorKind::Name, "internal error: unknown function"))?
-            .body;
-        let result = self.check(body, &key.1)?;
+        let result = self.check(&functions.get(function).body, &key.1)?;
         self.checked.insert(key, result.clone());
         Ok(result)
     }
 
-    fn call_at(&mut self, function: usize, args: Vec<Ty>, site: &Span) -> Result<Ty, Error> {
-        self.call(function, args).map_err(|error| {
-            let name = self
-                .functions
-                .get(function)
-                .map_or("?", |function| function.name.as_str());
-            error.in_function(name, Some(site))
-        })
+    fn call_at(&mut self, function: FunctionId, args: Vec<Ty>, site: &Span) -> Result<Ty, Error> {
+        self.call(function, args)
+            .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
     }
 
     fn check(&mut self, expr: &Expr, args: &[Ty]) -> Result<Ty, Error> {
         match expr {
             Expr::Str(_) => Ok(Ty::String),
-            Expr::Param(position) => args
-                .get(*position)
-                .cloned()
-                .ok_or_else(|| Error::new(ErrorKind::Name, "internal error: missing argument")),
+            #[expect(clippy::indexing_slicing, reason = "every call passes every argument")]
+            Expr::Param(position) => Ok(args[*position].clone()),
             Expr::List(items, span) => {
                 let mut list = Ty::Never;
                 for item in items {
@@ -115,7 +105,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn map(&mut self, function: usize, types: Vec<Ty>, span: &Span) -> Result<Ty, Error> {
+    fn map(&mut self, function: FunctionId, types: Vec<Ty>, span: &Span) -> Result<Ty, Error> {
         let item = match types.into_iter().next() {
             Some(Ty::List(item)) => *item,
             Some(Ty::Never) => Ty::Never,
