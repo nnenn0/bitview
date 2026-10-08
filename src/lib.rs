@@ -157,7 +157,7 @@ impl Program {
         let result = evaluator
             .call(index, &[ctx])
             .map_err(|error| error.in_function(entry, None))?;
-        eval::into_html(result).map_err(|other| {
+        eval::into_html([result]).map_err(|other| {
             Error::at(
                 ErrorKind::Type,
                 &function.span,

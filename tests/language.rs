@@ -398,6 +398,9 @@ fn deep_nesting_fails_without_exhausting_the_stack() -> Result<()> {
         assert_eq!(error.kind(), ErrorKind::Syntax);
         assert!(error.message().contains("nested"), "{error}");
     }
+    let error = parse_error(&format!("fn page(ctx) => ctx{}", ".a".repeat(depth)))?;
+    assert_eq!(error.kind(), ErrorKind::Syntax);
+    assert!(error.message().contains("nested"), "{error}");
     let text = format!(
         "fn page(ctx) => {}\"x\"{}",
         "div(".repeat(100),
@@ -783,6 +786,15 @@ fn values_validate_against_their_exact_type() -> Result<()> {
             "value.extra is not a field of the type",
         ),
         (
+            Value::record([
+                ("flag", Value::from(true)),
+                ("title", Value::from("T")),
+                ("title", Value::from(true)),
+                ("items", Value::from(Vec::new())),
+            ]),
+            "value.title is given twice",
+        ),
+        (
             Value::from("text"),
             "value is a String, but the type is Record {flag, title, items}",
         ),
@@ -795,5 +807,18 @@ fn values_validate_against_their_exact_type() -> Result<()> {
             .validate(&Value::from("text"))
             .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn fields_are_read_from_records_that_functions_return() -> Result<()> {
+    let text = "fn page(ctx) => p(info(ctx).title, info(ctx).note)\nfn info(ctx) => {title: \"T\", note: ctx.note}";
+    let ctx = Value::record([("note", Value::from("n"))]);
+    assert_eq!(render(text, ctx.clone())?, "<p>Tn</p>");
+    let error = render_error(
+        "fn page(ctx) => p(info(ctx).other)\nfn info(ctx) => {title: \"T\"}",
+        ctx,
+    )?;
+    assert_eq!(error.message(), "unknown field \"other\" (fields: title)");
     Ok(())
 }
