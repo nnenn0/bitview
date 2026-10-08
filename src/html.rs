@@ -234,7 +234,7 @@ pub(crate) enum Node {
     Text(String),
     Element {
         spec: &'static ElementSpec,
-        attrs: Vec<(String, String)>,
+        attributes: Vec<(String, String)>,
         children: Vec<Node>,
         /// Kept on each element so that checking the depth never walks the tree again.
         depth: u16,
@@ -269,12 +269,12 @@ impl Html {
     /// 256 levels deep.
     pub fn element(
         name: &str,
-        attrs: Vec<(String, String)>,
+        attributes: Vec<(String, String)>,
         children: Self,
     ) -> Result<Self, Error> {
         let spec = element_spec(name)
             .ok_or_else(|| Error::new(ErrorKind::Html, format!("unknown element <{name}>")))?;
-        build_element(spec, attrs, children)
+        build_element(spec, attributes, children)
     }
 
     /// A `<style>` element with `css` inside.
@@ -378,7 +378,7 @@ impl FromIterator<Html> for Html {
 
 pub(crate) fn build_element(
     spec: &'static ElementSpec,
-    attrs: Vec<(String, String)>,
+    attributes: Vec<(String, String)>,
     children: Html,
 ) -> Result<Html, Error> {
     let depth = children.depth().saturating_add(1);
@@ -391,9 +391,9 @@ pub(crate) fn build_element(
     if spec.void && !children.is_empty() {
         return Err(Error::void_with_children(spec));
     }
-    for (position, (name, value)) in attrs.iter().enumerate() {
+    for (position, (name, value)) in attributes.iter().enumerate() {
         check_attribute(spec, name)?;
-        if attrs
+        if attributes
             .iter()
             .take(position)
             .any(|(earlier, _)| earlier == name)
@@ -419,7 +419,7 @@ pub(crate) fn build_element(
     let content = spec.place(children.content())?;
     Ok(Html(vec![Node::Element {
         spec,
-        attrs,
+        attributes,
         children: children.0,
         depth,
         content,
@@ -624,24 +624,24 @@ mod tests {
     fn elements_check_names_attributes_and_void_children() -> Result<(), Error> {
         assert!(Html::element("script", Vec::new(), Html::default()).is_err());
         assert!(Html::element("img", Vec::new(), Html::text("x")).is_err());
-        let attrs = |name: &str| vec![(name.to_owned(), "x".to_owned())];
-        assert!(Html::element("p", attrs("Class"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("a b"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("\"x"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("onclick"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("style"), Html::default()).is_err());
-        assert!(Html::element("a", attrs("herf"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("href"), Html::default()).is_err());
-        assert!(Html::element("body", attrs("background"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("data-"), Html::default()).is_err());
-        assert!(Html::element("p", attrs("data-Index"), Html::default()).is_err());
+        let attributes = |name: &str| vec![(name.to_owned(), "x".to_owned())];
+        assert!(Html::element("p", attributes("Class"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("a b"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("\"x"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("onclick"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("style"), Html::default()).is_err());
+        assert!(Html::element("a", attributes("herf"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("href"), Html::default()).is_err());
+        assert!(Html::element("body", attributes("background"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("data-"), Html::default()).is_err());
+        assert!(Html::element("p", attributes("data-Index"), Html::default()).is_err());
         for name in ["id", "class", "data-index", "aria-label"] {
             assert!(
-                Html::element("p", attrs(name), Html::default()).is_ok(),
+                Html::element("p", attributes(name), Html::default()).is_ok(),
                 "{name}"
             );
         }
-        assert!(Html::element("a", attrs("target"), Html::default()).is_ok());
+        assert!(Html::element("a", attributes("target"), Html::default()).is_ok());
         let twice = vec![
             ("id".to_owned(), "a".to_owned()),
             ("id".to_owned(), "b".to_owned()),

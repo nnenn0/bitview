@@ -138,8 +138,8 @@ fn concat(values: Vec<Value>) -> Result<Value, Error> {
 
 fn element(spec: &'static ElementSpec, values: Vec<Value>) -> Result<Html, Error> {
     let mut values = values.into_iter().peekable();
-    let attrs = match values.next_if(|value| matches!(value, Value::Record(_))) {
-        Some(Value::Record(fields)) => attributes(spec, fields)?,
+    let attributes = match values.next_if(|value| matches!(value, Value::Record(_))) {
+        Some(Value::Record(fields)) => into_attributes(spec, fields)?,
         _ => Vec::new(),
     };
     if spec.void && values.peek().is_some() {
@@ -148,10 +148,10 @@ fn element(spec: &'static ElementSpec, values: Vec<Value>) -> Result<Html, Error
     let children = into_html(values).map_err(|other| {
         Error::not_a_child(spec, other.type_name(), matches!(other, Value::Record(_)))
     })?;
-    html::build_element(spec, attrs, children)
+    html::build_element(spec, attributes, children)
 }
 
-fn attributes(
+fn into_attributes(
     spec: &ElementSpec,
     fields: Vec<(String, Value)>,
 ) -> Result<Vec<(String, String)>, Error> {
