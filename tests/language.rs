@@ -54,10 +54,10 @@ fn attributes_are_escaped_in_order() -> Result<()> {
     );
     assert_eq!(
         render(
-            r#"fn page(ctx) => meta({http-equiv: "x", "content": "y"})"#,
+            r#"fn page(ctx) => span({aria-label: "x", "data-id": "y"})"#,
             empty()
         )?,
-        "<meta http-equiv=\"x\" content=\"y\">"
+        "<span aria-label=\"x\" data-id=\"y\"></span>"
     );
     Ok(())
 }
@@ -533,7 +533,7 @@ fn void_elements_take_no_child_arguments() -> Result<()> {
 
 fn check_error(text: &str, ctx: &Type) -> Result<BitviewError> {
     parse(text)?
-        .check("page", ctx)
+        .check(&[("page", ctx.clone())])
         .err()
         .ok_or_else(|| format!("checked: {text}").into())
 }
@@ -572,6 +572,31 @@ fn check_finds_field_errors_in_every_branch_and_map() -> Result<()> {
 }
 
 #[test]
+fn check_finds_misspelled_attributes() -> Result<()> {
+    let text = "fn page(ctx) =>\n  div(if ctx.flag then a({herf: \"/\"}, ctx.title) else [])";
+    let error = check_error(text, &post_type())?;
+    assert_eq!(error.kind(), ErrorKind::Html);
+    assert!(
+        error
+            .to_string()
+            .starts_with("t.bv:2:24: <a> has no attribute \"herf\"; it takes href,"),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn check_rejects_functions_no_entry_calls() -> Result<()> {
+    let text = "fn page(ctx) => p(ctx.title)\nfn unused(x) => p(x.titel)";
+    let error = check_error(text, &post_type())?;
+    assert_eq!(
+        error.to_string(),
+        "t.bv:2:1: function unused is not called from page, so it cannot be checked; call it or remove it"
+    );
+    Ok(())
+}
+
+#[test]
 fn if_and_lists_take_the_least_common_type() -> Result<()> {
     for text in [
         r#"fn page(ctx) => p(if ctx.flag then span("draft") else [])"#,
@@ -583,7 +608,7 @@ fn pick(ctx) => if ctx.flag then [{n: "a"}] else []
 fn name(x) => x.n"#,
     ] {
         let program = parse(text)?;
-        program.check("page", &post_type())?;
+        program.check(&[("page", post_type())])?;
     }
     for (text, message) in [
         (
@@ -637,12 +662,12 @@ fn check_finds_values_used_where_they_do_not_fit() -> Result<()> {
     }
     assert!(
         parse("fn page(ctx) => p(ctx.title)")?
-            .check("page", &post_type())
+            .check(&[("page", post_type())])
             .is_ok()
     );
     assert_eq!(
         parse("fn page(ctx) => p(\"x\")")?
-            .check("missing", &post_type())
+            .check(&[("missing", post_type())])
             .err()
             .as_ref()
             .map(BitviewError::kind),

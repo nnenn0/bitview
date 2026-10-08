@@ -10,15 +10,45 @@ use crate::{
 pub(crate) struct ElementSpec {
     pub(crate) name: &'static str,
     pub(crate) void: bool,
+    /// The attributes this element takes besides [`GLOBAL_ATTRIBUTES`], `data-*`, and `aria-*`.
+    attributes: &'static [&'static str],
 }
 
 const fn normal(name: &'static str) -> ElementSpec {
-    ElementSpec { name, void: false }
+    ElementSpec {
+        name,
+        void: false,
+        attributes: &[],
+    }
 }
 
 const fn void(name: &'static str) -> ElementSpec {
-    ElementSpec { name, void: true }
+    ElementSpec {
+        name,
+        void: true,
+        attributes: &[],
+    }
 }
+
+impl ElementSpec {
+    const fn takes(self, attributes: &'static [&'static str]) -> Self {
+        Self { attributes, ..self }
+    }
+}
+
+/// Only the attributes listed here and in [`ELEMENTS`] can be written, so that a misspelled name
+/// such as `herf` fails instead of leaving an attribute the browser ignores.
+const GLOBAL_ATTRIBUTES: [&str; 9] = [
+    "id",
+    "class",
+    "title",
+    "lang",
+    "dir",
+    "hidden",
+    "role",
+    "tabindex",
+    "translate",
+];
 
 /// The elements that templates and Rust can build: those that genbit's templates and its Markdown
 /// output use. Add an element when a template needs it. Elements that run code or change how the whole
@@ -29,8 +59,18 @@ const ELEMENTS: &[ElementSpec] = &[
     normal("head"),
     normal("body"),
     normal("title"),
-    void("meta"),
-    void("link"),
+    void("meta").takes(&["name", "content", "charset", "property", "media"]),
+    void("link").takes(&[
+        "rel",
+        "href",
+        "type",
+        "sizes",
+        "hreflang",
+        "media",
+        "as",
+        "imagesrcset",
+        "imagesizes",
+    ]),
     normal("header"),
     normal("footer"),
     normal("main"),
@@ -47,28 +87,47 @@ const ELEMENTS: &[ElementSpec] = &[
     normal("p"),
     normal("div"),
     normal("ul"),
-    normal("ol"),
-    normal("li"),
+    normal("ol").takes(&["start", "reversed", "type"]),
+    normal("li").takes(&["value"]),
     normal("dl"),
     normal("dt"),
     normal("dd"),
-    normal("blockquote"),
+    normal("blockquote").takes(&["cite"]),
     normal("pre"),
     void("hr"),
-    normal("a"),
+    normal("a").takes(&[
+        "href",
+        "target",
+        "rel",
+        "hreflang",
+        "type",
+        "download",
+        "ping",
+        "referrerpolicy",
+    ]),
     normal("span"),
-    normal("time"),
+    normal("time").takes(&["datetime"]),
     normal("strong"),
     normal("em"),
     normal("code"),
     void("br"),
-    void("img"),
+    void("img").takes(&[
+        "src",
+        "alt",
+        "width",
+        "height",
+        "loading",
+        "decoding",
+        "srcset",
+        "sizes",
+        "referrerpolicy",
+    ]),
     normal("table"),
     normal("thead"),
     normal("tbody"),
     normal("tr"),
-    normal("th"),
-    normal("td"),
+    normal("th").takes(&["colspan", "rowspan", "scope", "abbr"]),
+    normal("td").takes(&["colspan", "rowspan"]),
 ];
 
 pub(crate) fn element_spec(name: &str) -> Option<&'static ElementSpec> {
@@ -79,9 +138,8 @@ pub(crate) fn element_spec(name: &str) -> Option<&'static ElementSpec> {
 /// keeps both far from the end of the stack, even for Markdown with thousands of nested quotes.
 const MAX_DEPTH: u16 = 256;
 
-/// Attributes whose values browsers follow as URLs. `background` is obsolete, but browsers still load
-/// it as the image behind `body` and table cells.
-const URL_ATTRIBUTES: [&str; 4] = ["href", "src", "cite", "background"];
+/// Attributes whose values browsers follow as URLs.
+const URL_ATTRIBUTES: [&str; 3] = ["href", "src", "cite"];
 /// Attributes whose values browsers read as several URLs: image candidates separated by commas, each
 /// followed by its descriptors (`srcset`, `imagesrcset`), or URLs separated by spaces (`ping`).
 const URL_LIST_ATTRIBUTES: [&str; 3] = ["srcset", "imagesrcset", "ping"];
@@ -244,7 +302,7 @@ pub(crate) fn build_element(
         ));
     }
     for (position, (name, value)) in attrs.iter().enumerate() {
-        check_attribute_name(name)?;
+        check_attribute(spec, name)?;
         if attrs
             .iter()
             .take(position)
@@ -276,7 +334,7 @@ pub(crate) fn build_element(
     }]))
 }
 
-pub(crate) fn check_attribute_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_attribute(spec: &ElementSpec, name: &str) -> Result<(), Error> {
     // Scripts and CSS live outside the HTML: in no page at all, and in the CSS files.
     if name.starts_with("on") || name == "style" {
         return Err(Error::new(
@@ -284,21 +342,31 @@ pub(crate) fn check_attribute_name(name: &str) -> Result<(), Error> {
             format!("attribute {name} is not allowed; scripts and CSS do not go in attributes"),
         ));
     }
-    let mut characters = name.chars();
-    let valid = characters
-        .next()
-        .is_some_and(|first| first.is_ascii_lowercase())
-        && characters.all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    let custom = ["data-", "aria-"]
+        .iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
+        .is_some_and(|rest| {
+            rest.starts_with(|first: char| first.is_ascii_lowercase())
+                && rest.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
         });
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::new(
-            ErrorKind::Html,
-            format!("invalid attribute name {name:?}; use lowercase letters, digits, and -"),
-        ))
+    if custom || GLOBAL_ATTRIBUTES.contains(&name) || spec.attributes.contains(&name) {
+        return Ok(());
     }
+    let own = if spec.attributes.is_empty() {
+        String::new()
+    } else {
+        format!("{}, ", spec.attributes.join(", "))
+    };
+    Err(Error::new(
+        ErrorKind::Html,
+        format!(
+            "<{}> has no attribute {name:?}; it takes {own}the global attributes ({}), data-*, and aria-*",
+            spec.name,
+            GLOBAL_ATTRIBUTES.join(", ")
+        ),
+    ))
 }
 
 /// Rejects URLs whose scheme is not allowed. Browsers strip leading and trailing control
@@ -403,33 +471,28 @@ mod tests {
 
     #[test]
     fn every_url_in_a_list_attribute_is_checked() {
-        let image = |name: &str, value: &str| {
+        let build = |element: &str, name: &str, value: &str| {
             Html::element(
-                "img",
-                vec![
-                    ("src".to_owned(), "/a.png".to_owned()),
-                    (name.to_owned(), value.to_owned()),
-                ],
+                element,
+                vec![(name.to_owned(), value.to_owned())],
                 Html::default(),
             )
         };
-        for (name, value) in [
-            ("srcset", "/a.png 1x, https://example.com/b,c.png 2x"),
-            ("srcset", "a.png 100w,b.png 200w"),
-            ("ping", "https://example.com/p /q"),
-            ("background", "/bg.png"),
+        for (element, name, value) in [
+            ("img", "srcset", "/a.png 1x, https://example.com/b,c.png 2x"),
+            ("img", "srcset", "a.png 100w,b.png 200w"),
+            ("a", "ping", "https://example.com/p /q"),
         ] {
-            assert!(image(name, value).is_ok(), "{name}={value:?}");
+            assert!(build(element, name, value).is_ok(), "{name}={value:?}");
         }
-        for (name, value) in [
-            ("srcset", "/a.png 1x, data:image/png;base64,AAAA 2x"),
-            ("srcset", "/a.png 1x,javascript:x 2x"),
-            ("srcset", "/a.png,\u{1}javascript:x"),
-            ("imagesrcset", "javascript:x"),
-            ("ping", "https://example.com/p javascript:x"),
-            ("background", "javascript:x"),
+        for (element, name, value) in [
+            ("img", "srcset", "/a.png 1x, data:image/png;base64,AAAA 2x"),
+            ("img", "srcset", "/a.png 1x,javascript:x 2x"),
+            ("img", "srcset", "/a.png,\u{1}javascript:x"),
+            ("link", "imagesrcset", "javascript:x"),
+            ("a", "ping", "https://example.com/p javascript:x"),
         ] {
-            assert!(image(name, value).is_err(), "{name}={value:?}");
+            assert!(build(element, name, value).is_err(), "{name}={value:?}");
         }
     }
 
@@ -466,6 +529,18 @@ mod tests {
         assert!(Html::element("p", attrs("\"x"), Html::default()).is_err());
         assert!(Html::element("p", attrs("onclick"), Html::default()).is_err());
         assert!(Html::element("p", attrs("style"), Html::default()).is_err());
+        assert!(Html::element("a", attrs("herf"), Html::default()).is_err());
+        assert!(Html::element("p", attrs("href"), Html::default()).is_err());
+        assert!(Html::element("body", attrs("background"), Html::default()).is_err());
+        assert!(Html::element("p", attrs("data-"), Html::default()).is_err());
+        assert!(Html::element("p", attrs("data-Index"), Html::default()).is_err());
+        for name in ["id", "class", "data-index", "aria-label"] {
+            assert!(
+                Html::element("p", attrs(name), Html::default()).is_ok(),
+                "{name}"
+            );
+        }
+        assert!(Html::element("a", attrs("target"), Html::default()).is_ok());
         let twice = vec![
             ("id".to_owned(), "a".to_owned()),
             ("id".to_owned(), "b".to_owned()),

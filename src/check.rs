@@ -173,7 +173,7 @@ fn element(spec: &ElementSpec, types: &[Ty]) -> Result<Ty, Error> {
     let children = match types.split_first() {
         Some((Ty::Record(attrs), children)) => {
             for (name, ty) in attrs {
-                html::check_attribute_name(name)?;
+                html::check_attribute(spec, name)?;
                 if !matches!(ty, Ty::String | Ty::Never) {
                     return Err(Error::new(
                         ErrorKind::Type,
