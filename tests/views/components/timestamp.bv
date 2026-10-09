@@ -1,2 +1,2 @@
-(defn timestamp [stamp {:datetime String :date String}]
+(defn timestamp [stamp Timestamp]
   (time {:datetime stamp.datetime} stamp.date))

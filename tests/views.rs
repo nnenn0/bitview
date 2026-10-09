@@ -24,7 +24,94 @@ fn program() -> Result<Program> {
         .iter()
         .map(|(name, text)| Source { name, text })
         .collect::<Vec<_>>();
-    Ok(Program::parse(&sources)?)
+    Ok(Program::parse(&sources, &types())?)
+}
+
+/// The types genbit names for the views: the parts of its pages, and the pages themselves.
+fn types() -> Vec<(&'static str, Type)> {
+    let site = Type::record([
+        ("title", Type::String),
+        ("description", Type::String),
+        ("url", Type::String),
+        ("og-image", Type::String),
+    ]);
+    let index = Type::record([
+        ("url", Type::String),
+        ("json-ld", Type::Html(HtmlType::Metadata)),
+    ]);
+    let timestamp = Type::record([("datetime", Type::String), ("date", Type::String)]);
+    let tag_link = Type::record([("name", Type::String), ("url", Type::String)]);
+    let tag_count = Type::record([
+        ("name", Type::String),
+        ("url", Type::String),
+        ("count", Type::String),
+    ]);
+    let entry = Type::record([
+        ("title", Type::String),
+        ("description", Type::String),
+        ("url", Type::String),
+        ("created-at", timestamp.clone()),
+        ("updated-at", timestamp.clone()),
+        ("tags", Type::list(tag_link.clone())),
+        ("draft", Type::Bool),
+    ]);
+    // Every page has the site and its CSS, and every page a search engine indexes has an index.
+    let page = |indexed: bool, fields: Vec<(&str, Type)>| {
+        let mut all = vec![
+            ("site", site.clone()),
+            ("style", Type::Html(HtmlType::Metadata)),
+        ];
+        if indexed {
+            all.push(("index", index.clone()));
+        }
+        all.extend(fields);
+        Type::record(all)
+    };
+    vec![
+        (
+            "RootPage",
+            page(true, vec![("entries", Type::list(entry.clone()))]),
+        ),
+        (
+            "ArticlePage",
+            page(
+                true,
+                vec![
+                    ("article", entry.clone()),
+                    ("content", Type::Html(HtmlType::Flow)),
+                ],
+            ),
+        ),
+        (
+            "TagsPage",
+            page(true, vec![("tags", Type::list(tag_count.clone()))]),
+        ),
+        (
+            "TagPage",
+            page(
+                true,
+                vec![
+                    ("tag", Type::String),
+                    ("entries", Type::list(entry.clone())),
+                ],
+            ),
+        ),
+        ("NotFoundPage", page(false, Vec::new())),
+        ("Site", site),
+        ("Index", index),
+        ("Entry", entry),
+        ("Timestamp", timestamp),
+        ("TagLink", tag_link),
+        ("TagCount", tag_count),
+    ]
+}
+
+fn page_type(name: &str) -> Result<Type> {
+    types()
+        .into_iter()
+        .find(|(type_name, _)| *type_name == name)
+        .map(|(_, ty)| ty)
+        .ok_or_else(|| format!("no type {name}").into())
 }
 
 const SITE_TITLE: &str = "Blog &amp; &lt;Notes&gt;";
@@ -51,13 +138,16 @@ fn ctx(fields: Vec<(&str, Value)>) -> Result<Value> {
 }
 
 fn indexed(url: &str, json: &str, fields: Vec<(&str, Value)>) -> Result<Value> {
-    let mut all = vec![
-        ("canonical-url", Value::from(url)),
-        (
-            "json-ld",
-            Value::from(Html::json("application/ld+json", json)?),
-        ),
-    ];
+    let mut all = vec![(
+        "index",
+        Value::record([
+            ("url", Value::from(url)),
+            (
+                "json-ld",
+                Value::from(Html::json("application/ld+json", json)?),
+            ),
+        ]),
+    )];
     all.extend(fields);
     ctx(all)
 }
@@ -324,87 +414,27 @@ fn pages_use_functions_from_the_document_to_the_page() -> Result<()> {
     Ok(())
 }
 
-/// The types genbit passes, which `Program::check` holds the views to before any page renders.
-fn context_type(fields: Vec<(&str, Type)>) -> Type {
-    let site = Type::record([
-        ("title", Type::String),
-        ("description", Type::String),
-        ("url", Type::String),
-        ("og-image", Type::String),
-    ]);
-    let mut all = vec![("site", site), ("style", Type::Html(HtmlType::Metadata))];
-    all.extend(fields);
-    Type::record(all)
-}
-
-fn indexed_type(fields: Vec<(&str, Type)>) -> Type {
-    let mut all = vec![
-        ("canonical-url", Type::String),
-        ("json-ld", Type::Html(HtmlType::Metadata)),
-    ];
-    all.extend(fields);
-    context_type(all)
-}
-
-fn entry_type() -> Type {
-    let timestamp = Type::record([("datetime", Type::String), ("date", Type::String)]);
-    Type::record([
-        ("title", Type::String),
-        ("description", Type::String),
-        ("url", Type::String),
-        ("created-at", timestamp.clone()),
-        ("updated-at", timestamp),
-        (
-            "tags",
-            Type::list(Type::record([
-                ("name", Type::String),
-                ("url", Type::String),
-            ])),
-        ),
-        ("draft", Type::Bool),
-    ])
-}
-
 #[test]
-fn every_page_passes_the_type_check() -> Result<()> {
+fn every_page_takes_the_type_genbit_gives_it() -> Result<()> {
     let program = program()?;
-    let tag = Type::record([
-        ("name", Type::String),
-        ("url", Type::String),
-        ("count", Type::String),
-    ]);
     let pages = [
-        (
-            "root",
-            indexed_type(vec![("entries", Type::list(entry_type()))]),
-        ),
-        (
-            "page",
-            indexed_type(vec![
-                ("article", entry_type()),
-                ("content", Type::Html(HtmlType::Flow)),
-            ]),
-        ),
-        ("tags", indexed_type(vec![("tags", Type::list(tag))])),
-        (
-            "tag",
-            indexed_type(vec![
-                ("tag", Type::String),
-                ("entries", Type::list(entry_type())),
-            ]),
-        ),
-        ("not-found", context_type(Vec::new())),
-    ];
+        ("root", "RootPage"),
+        ("page", "ArticlePage"),
+        ("tags", "TagsPage"),
+        ("tag", "TagPage"),
+        ("not-found", "NotFoundPage"),
+    ]
+    .into_iter()
+    .map(|(entry, ty)| Ok((entry, page_type(ty)?)))
+    .collect::<Result<Vec<_>>>()?;
     program.check(&pages)?;
-    let missing_date = context_type(vec![("article", Type::record([("title", Type::String)]))]);
-    assert!(program.check(&[("page", missing_date)]).is_err());
     let error = program
-        .check(&pages[1..])
+        .check(&[("page", page_type("NotFoundPage")?)])
         .err()
-        .ok_or("checked without the home page")?;
+        .ok_or("checked the article page with the type of the 404 page")?;
     assert_eq!(
         error.to_string(),
-        "views/pages/root.bv:1:1: function root is not called from page, tags, tag, not-found, so it cannot be checked; call it or remove it"
+        "views/pages/page.bv:1:1: ctx has no field \"index\", which its type lists\n  in page"
     );
     Ok(())
 }

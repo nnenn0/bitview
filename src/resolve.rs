@@ -3,9 +3,11 @@
 //! parameters, so every call target is fixed here.
 
 use crate::{
-    ast::{Callee, Def, Expr, Function, Syntax},
+    Type,
+    ast::{Callee, Def, Expr, Function, Param, Syntax, TypeSyntax},
     error::{Error, ErrorKind, Span},
     html,
+    types::{self, Ty},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -99,7 +101,11 @@ impl Names {
 }
 
 /// Resolves the definitions of each source, given in the order of the sources.
-pub(crate) fn resolve(sources: Vec<Vec<Def>>) -> Result<Functions, Error> {
+pub(crate) fn resolve(
+    sources: Vec<Vec<Def>>,
+    host_types: &[(&str, Type)],
+) -> Result<Functions, Error> {
+    let types = TypeNames::new(host_types)?;
     let mut names = Names {
         public: HashMap::new(),
         private: Vec::with_capacity(sources.len()),
@@ -154,7 +160,7 @@ pub(crate) fn resolve(sources: Vec<Vec<Def>>) -> Result<Functions, Error> {
         .into_iter()
         .enumerate()
         .flat_map(|(source, defs)| defs.into_iter().map(move |def| (source, def)))
-        .map(|(source, def)| resolve_function(def, &names, source))
+        .map(|(source, def)| resolve_function(def, &names, &types, source))
         .collect::<Result<Vec<_>, _>>()?;
     let functions = Functions {
         list,
@@ -172,9 +178,80 @@ fn is_builtin(name: &str) -> bool {
     matches!(name, "map" | "concat") || html::element_spec(name).is_some()
 }
 
-fn resolve_function(def: Def, names: &Names, source: usize) -> Result<Function, Error> {
+/// The types that parameters can name: the built-in ones, then the host's.
+struct TypeNames(Vec<(String, Ty)>);
+
+impl TypeNames {
+    fn new(host: &[(&str, Type)]) -> Result<Self, Error> {
+        let mut names = types::BUILT_IN
+            .iter()
+            .map(|(name, ty)| ((*name).to_owned(), Ty::from(ty)))
+            .collect::<Vec<_>>();
+        for (name, ty) in host {
+            let mut characters = name.chars();
+            let well_formed = characters
+                .next()
+                .is_some_and(|first| first.is_ascii_uppercase())
+                && characters.all(|character| character.is_ascii_alphanumeric());
+            if !well_formed {
+                return Err(Error::new(
+                    ErrorKind::Name,
+                    format!(
+                        "type name {name:?} must be an uppercase letter followed by letters and digits, as in Entry"
+                    ),
+                ));
+            }
+            if names.iter().any(|(existing, _)| existing == name) {
+                return Err(Error::new(
+                    ErrorKind::Name,
+                    format!("type {name} is defined twice or is built in"),
+                ));
+            }
+            names.push(((*name).to_owned(), Ty::from(ty)));
+        }
+        Ok(Self(names))
+    }
+
+    fn resolve(&self, syntax: TypeSyntax) -> Result<Ty, Error> {
+        Ok(match syntax {
+            TypeSyntax::Name(name, span) => self
+                .0
+                .iter()
+                .find(|(known, _)| *known == name)
+                .map(|(_, ty)| ty.clone())
+                .ok_or_else(|| {
+                    let known = self
+                        .0
+                        .iter()
+                        .map(|(known, _)| known.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Error::at(
+                        ErrorKind::Name,
+                        &span,
+                        format!("unknown type {name} (types: {known})"),
+                    )
+                })?,
+            TypeSyntax::List(item) => Ty::List(Box::new(self.resolve(*item)?)),
+            TypeSyntax::Record(fields) => Ty::Record(
+                fields
+                    .into_iter()
+                    .map(|(key, ty)| Ok((key, self.resolve(ty)?)))
+                    .collect::<Result<_, Error>>()?,
+            ),
+        })
+    }
+}
+
+fn resolve_function(
+    def: Def,
+    names: &Names,
+    types: &TypeNames,
+    source: usize,
+) -> Result<Function, Error> {
     let mut param_names = Vec::with_capacity(def.params.len());
-    for param in &def.params {
+    let mut params = Vec::with_capacity(def.params.len());
+    for param in def.params {
         if param_names.contains(&param.name) {
             return Err(Error::at(
                 ErrorKind::Name,
@@ -183,6 +260,10 @@ fn resolve_function(def: Def, names: &Names, source: usize) -> Result<Function, 
             ));
         }
         param_names.push(param.name.clone());
+        params.push(Param {
+            name: param.name,
+            ty: types.resolve(param.ty)?,
+        });
     }
     let scope = Scope {
         params: &param_names,
@@ -196,7 +277,7 @@ fn resolve_function(def: Def, names: &Names, source: usize) -> Result<Function, 
         body,
         name: def.name,
         public: def.public,
-        params: def.params,
+        params,
         span: def.span,
         calls,
     })

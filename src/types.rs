@@ -26,6 +26,15 @@ pub enum HtmlType {
     Metadata,
 }
 
+/// The types every template can name, besides those the host names.
+pub(crate) const BUILT_IN: [(&str, Type); 5] = [
+    ("String", Type::String),
+    ("Bool", Type::Bool),
+    ("Flow", Type::Html(HtmlType::Flow)),
+    ("Phrasing", Type::Html(HtmlType::Phrasing)),
+    ("Metadata", Type::Html(HtmlType::Metadata)),
+];
+
 impl HtmlType {
     fn content(self) -> Content {
         match self {

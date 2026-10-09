@@ -1,14 +1,16 @@
-(defn layout [ctx page-title description og-type header-content main-content]
-  (document ctx page-title (seo ctx page-title description og-type) header-content main-content))
+(defn layout [page {:site Site :style Metadata :index Index}
+              page-title String description String og-type String
+              header-content Flow main-content Flow]
+  (document page page-title (seo page page-title description og-type) header-content main-content))
 
-(defn- seo [ctx page-title description og-type]
+(defn- seo [page {:site Site :index Index} page-title String description String og-type String]
   [(meta {:name "description" :content description})
-   (link {:rel "canonical" :href ctx.canonical-url})
+   (link {:rel "canonical" :href page.index.url})
    (meta {:property "og:title" :content page-title})
    (meta {:property "og:description" :content description})
    (meta {:property "og:type" :content og-type})
-   (meta {:property "og:url" :content ctx.canonical-url})
-   (meta {:property "og:site_name" :content ctx.site.title})
-   (meta {:property "og:image" :content ctx.site.og-image})
-   (meta {:property "og:image:alt" :content ctx.site.title})
-   ctx.json-ld])
+   (meta {:property "og:url" :content page.index.url})
+   (meta {:property "og:site_name" :content page.site.title})
+   (meta {:property "og:image" :content page.site.og-image})
+   (meta {:property "og:image:alt" :content page.site.title})
+   page.index.json-ld])

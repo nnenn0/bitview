@@ -3,7 +3,7 @@
 HTML を文字列ではなく値として組み立てる、小さい純粋関数型のテンプレート言語。描画の前にテンプレートを型で検査し、エスケープの漏れやスクリプトを書く手段を持たない。
 
 ```clojure
-(defn page [ctx]
+(defn page [ctx ArticlePage]
   (html {:lang "ja"}
     (head (title (concat ctx.article.title " | " ctx.site.title)))
     (body
@@ -12,9 +12,11 @@ HTML を文字列ではなく値として組み立てる、小さい純粋関数
         (ul (map ctx.article.tags tag-item))
         ctx.content))))
 
-(defn- tag-item [tag]
+(defn- tag-item [tag {:url String :name String}]
   (li (a {:href tag.url} tag.name)))
 ```
+
+`ArticlePage` は、ホストが Rust で定義して名前を付けた型である。
 
 > [!NOTE]
 > bitviewは、静的サイトジェネレーター [genbit](https://github.com/nnenn0/genbit) のテンプレートを書くために作っている個人用の言語で、genbit から Rust のクレートとして使う。構文、標準の要素と属性、Rust の API は、どの版でも互換性なく変わる可能性がある。使う場合は版のタグを固定すること。
@@ -33,15 +35,14 @@ HTML を文字列ではなく値として組み立てる、小さい純粋関数
 
 ### 描画の前に誤りが見つかる
 
-ホストは、ページの入口の関数と、そこへ渡す値の型を `Program::check` に渡す。テンプレートに型を書かなくてもよいが、引数に型を書くと、その関数が読むものがわかり、関数そのものの誤りとして検査される。検査は `if` の両側と `map` の中にも及ぶので、特定のデータのときにしか通らない分岐の誤りも、描画の前に位置と呼び出しの経路付きで見つかる。
+関数の引数には必ず型を書く。読み込むときに、すべての関数を、引数の型だけを手がかりに1つずつ検査する。検査は `if` の両側と `map` の中にも及ぶので、特定のデータのときにしか通らない分岐の誤りも、描画の前に、誤りのある関数の位置で見つかる。
 
 ```text
-views/page.bv:5:30: unknown field "titel" (fields: title, draft, content)
-  in badge (called at views/page.bv:2:30)
-  in page
+views/components/badge.bv:2:30: unknown field "titel" (fields: title, draft)
+  in badge
 ```
 
-見つかる誤りは、存在しない項目、型の合わない値、要素に書けない属性（`herf` のような綴りの誤りを含む）、`(p (div ...))` のように HTML で置けない入れ子、引数の型に合わない値、どの入口からも呼ばれない（型を書いていない）関数である。
+見つかる誤りは、存在しない項目、型の合わない値、引数の型に合わない呼び出し、要素に書けない属性（`herf` のような綴りの誤りを含む）、`(p (div ...))` のように HTML で置けない入れ子である。
 
 ```text
 views/page.bv:2:6: <p> cannot contain block elements such as <p> and <div>; it takes text, phrasing elements such as <span> and <a>
@@ -69,21 +70,23 @@ genbit と同じく、Git の依存として版のタグで参照する。
 bitview = { git = "https://github.com/nnenn0/bitview", tag = "v0.2.0" }
 ```
 
-ホストはソースを読んで `Program::parse` に渡し、入口の関数を検査してから、値を渡して描画する。
+ホストは、テンプレートで使う型に名前を付け、ソースと一緒に `Program::parse` に渡す。`Program::parse` は、すべての関数をその時点で検査する。ホストは、入口の関数が自分の渡す型の値を受け取れることを `Program::check` で確かめてから、値を渡して描画する。
 
 ```rust
 use bitview::{Html, HtmlType, Program, Source, Type, Value};
 
-let program = Program::parse(&[Source {
-    name: "views/page.bv",
-    text: r#"(defn page [ctx] (html (body (h1 ctx.title) ctx.content)))"#,
-}])?;
-
-let ctx_type = Type::record([
+let page_type = Type::record([
     ("title", Type::String),
     ("content", Type::Html(HtmlType::Flow)),
 ]);
-program.check(&[("page", ctx_type)])?;
+let program = Program::parse(
+    &[Source {
+        name: "views/page.bv",
+        text: r#"(defn page [ctx Page] (html (body (h1 ctx.title) ctx.content)))"#,
+    }],
+    &[("Page", page_type.clone())],
+)?;
+program.check(&[("page", page_type)])?;
 
 let ctx = Value::record([
     ("title", Value::from("<Hello>")),
@@ -98,16 +101,15 @@ VS Code では、`editors/vscode` の拡張機能でハイライト、定義へ�
 ## 言語
 
 - 値: String、Bool、List、Record、Html。
-- 型: `String`、`Bool`、Html の `Flow`・`Phrasing`・`Metadata`、リスト `[String]`、レコード `{:title String :draft Bool}`。大文字で始まる語は型の名前で、引数の後にだけ書ける。
+- 型: `String`、`Bool`、Html の `Flow`・`Phrasing`・`Metadata`、ホストが名前を付けた型（`Entry` など）、リスト `[String]`、レコード `{:title String :draft Bool}`。大文字で始まる語は型の名前で、引数の後にだけ書ける。
 - 名前: 小文字と数字を `-` でつないだもの（`entry-list`）。CSS のクラス名やファイル名と同じ綴りにできる。`defn`・`defn-`・`if` は名前に使えない。
 - コメント: `;` から行末まで。
 - 構文: Clojure に似た S 式で書く。
 
   | 書き方 | 意味 |
   | --- | --- |
-  | `(defn name [a b] expr)` | 関数の定義。本体は1つの式 |
-  | `(defn- name [a b] expr)` | 定義したファイルの中でだけ呼べる関数の定義 |
-  | `(defn name [a {:x String} b] expr)` | 引数 `a` に型を書いた関数の定義。型は名前の後に書き、書かなくてもよい |
+  | `(defn name [a String b Entry] expr)` | 関数の定義。引数ごとに名前の後に型を書く。本体は1つの式 |
+  | `(defn- name [a String] expr)` | 定義したファイルの中でだけ呼べる関数の定義 |
   | `(f x y)` | 関数の呼び出し。先頭に書けるのは関数の名前だけ |
   | `a.b.c` | 引数 `a` のフィールドの参照。`.` の前後に空白を入れない |
   | `"text"` | 文字列 |
@@ -121,15 +123,15 @@ VS Code では、`editors/vscode` の拡張機能でハイライト、定義へ�
 
 `defn` で定義した関数は、すべてのファイルとホストから名前で呼べるので、名前はファイルをまたいで1つずつしか定義できない。`defn-` で定義した関数は、そのファイルの中からしか呼べず、ホストも入口として呼べない。そのため、別々のファイルが同じ名前の `defn-` の関数を持てる。ファイルの中では、`defn-` の関数が、ほかのファイルにある同じ名前の `defn` の関数を隠すので、ほかのファイルに関数が増えても、そのファイルの呼び出し先は変わらない。1つのファイルの中で同じ名前を2回定義するとエラーになる。
 
-空要素（`br`、`img` など）は子の引数を取らない。引数は同じ名前の関数を隠す（`(defn heading [title] (h1 title))` と書ける）。隠された名前を呼ぶとエラーになる。
+空要素（`br`、`img` など）は子の引数を取らない。引数は同じ名前の関数を隠す（`(defn heading [title String] (h1 title))` と書ける）。隠された名前を呼ぶとエラーになる。
 
 ## 型の検査
 
-`Program::check(&[(入口, ctx の型), …])` は、それぞれの入口をその型のどの値で描画しても、型や項目の誤りが起きないことを確かめる。型を書いていない引数がある関数は、入口からの呼び出しを通して検査するので、どの入口からも呼ばれなければエラーにする。
+`Program::parse(sources, types)` は、すべての関数を、引数の型で1回ずつ検査する。関数の本体は、呼び出し元から何が渡されるかに関係なく、型だけで検査が決まるので、どこからも呼ばれない関数も検査される。誤りは、誤りのある関数の中の位置で報告する。
+
+`Program::check(&[(入口, ctx の型), …])` は、ホストが渡す型の値を入口が受け取れること、つまりその型が入口の引数の型に合い、入口が Html を返すことを確かめる。
 
 ### 引数の型
-
-引数の名前の後に型を書くと、その引数の型を関数の側で決められる。
 
 ```clojure
 (defn draft-badge [entry {:draft Bool}]
@@ -139,10 +141,29 @@ VS Code では、`editors/vscode` の拡張機能でハイライト、定義へ�
 - レコードの型は、関数が読むフィールドを並べたもので、それ以上のフィールドを持つレコードも渡せる。記事と一覧の項目のように、別々の型のレコードを同じ関数に渡せる。
 - 関数の中から見えるのは、型に書いたフィールドだけである。書いていないフィールドを読むとエラーになるので、型を見れば、関数が何を読むかがわかる。
 - 呼び出す側では、渡す値が型に合うかを検査する。合わなければ、呼び出しの位置でエラーになる（`entry has no field "draft", which its type lists`）。
-- 本体は、渡された値ではなく書いた型で検査する。`[x Flow]` の `x` は、ブロックを含むかもしれない Html として扱うので、`(p x)` は文字列を渡す呼び出ししかなくてもエラーになる。文中に置く Html なら `Phrasing` と書く。
-- すべての引数に型を書いた関数は、どの入口からも呼ばれなくても、型だけで検査する。
-- 描画でも、引数を型に合わせてから本体に渡す。レコードは型に書いたフィールドだけを残し、文字列やリストは Html に変える。そのため、型に書いていないフィールドを読む誤りは、描画でも同じエラーになる。
-- `li` だけを並べた Html のように、`Flow`・`Phrasing`・`Metadata` で表せない Html を受け取る引数には、型を書かない。型を書かない引数は、これまでどおり呼び出しごとに渡された型で検査する。
+- 本体は、渡される値ではなく書いた型で検査する。`[x Flow]` の `x` は、ブロックを含むかもしれない Html として扱うので、`(p x)` は文字列しか渡されなくてもエラーになる。文中に置く Html なら `Phrasing` と書く。
+- 描画では、ホストが渡す値を入口の引数の型に合わせてから本体に渡す。レコードは型に書いたフィールドだけを残し、文字列やリストは Html に変える。型に合わない値は、`Program::check` と同じ文言のエラーになる。
+- Html の型は、`Flow`・`Phrasing`・`Metadata` の3つである。`li` だけを並べた Html のように、これらで表せない Html を受け取る関数は書けない。genbit で必要になったときに、型の名前を足す。
+
+### ホストが名前を付ける型
+
+ホストは、テンプレートに渡すデータの形に名前を付け、`Program::parse` の `types` に渡す。名前は大文字で始まり、英字と数字だけからなる。
+
+```rust
+let tag = Type::record([("name", Type::String), ("url", Type::String)]);
+let page = Type::record([("title", Type::String), ("tags", Type::list(tag.clone()))]);
+let program = Program::parse(&sources, &[("Tag", tag), ("TagsPage", page)])?;
+```
+
+```clojure
+(defn tags [ctx TagsPage]
+  (ul (map ctx.tags tag-link)))
+
+(defn- tag-link [tag Tag]
+  (li (a {:href tag.url} tag.name)))
+```
+
+データを作るホストが型も定義するので、テンプレートとホストで同じ形を二重に書かずに済む。部品は、ページの型を受け取る代わりに、`[page {:site Site :style Metadata}]` のように自分が読む部分だけを書けば、どのページの値もそのまま受け取れる。
 
 ### 値と Html
 

@@ -1,6 +1,6 @@
-//! Evaluation with types in place of values. There is no recursion, so following every call
-//! terminates, and checking both sides of every `if` and the body of every `map` finds the errors
-//! that rendering would meet only with some data.
+//! Checks each function once, with the types of its parameters in place of values. Checking both
+//! sides of every `if` and the body of every `map` finds the errors that rendering would meet only
+//! with some data.
 
 use crate::{
     ast::{Callee, Expr},
@@ -14,56 +14,55 @@ use std::collections::HashMap;
 
 pub(crate) struct Checker<'a> {
     functions: &'a Functions,
-    /// A function called again with the same argument types has the same result.
-    checked: HashMap<(FunctionId, Vec<Ty>), Ty>,
+    /// What each function checked so far returns.
+    results: HashMap<FunctionId, Ty>,
 }
 
 impl<'a> Checker<'a> {
     pub(crate) fn new(functions: &'a Functions) -> Self {
         Self {
             functions,
-            checked: HashMap::new(),
+            results: HashMap::new(),
         }
     }
 
-    /// Checks a call of `function`. A parameter with a type sees that type, whatever the argument
-    /// that fits it, so a function whose parameters all have types is checked once.
-    pub(crate) fn call(&mut self, function: FunctionId, args: Vec<Ty>) -> Result<Ty, Error> {
-        let args = self.arguments(function, args)?;
-        self.body(function, args)
+    /// Checks every function, each after the functions it calls, so that an error is reported in
+    /// the function that has it rather than in one of its callers.
+    pub(crate) fn check_all(&mut self) -> Result<(), Error> {
+        let functions = self.functions;
+        for (id, _) in functions.iter() {
+            for function in functions.used_by(id) {
+                self.result(function)?;
+            }
+        }
+        Ok(())
     }
 
-    /// A call from a template, where an argument that does not fit is the caller's error.
-    fn call_at(&mut self, function: FunctionId, args: Vec<Ty>, site: &Span) -> Result<Ty, Error> {
-        let args = self
-            .arguments(function, args)
-            .map_err(|error| error.with_span(site))?;
-        self.body(function, args)
-            .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
-    }
-
-    fn arguments(&self, function: FunctionId, args: Vec<Ty>) -> Result<Vec<Ty>, Error> {
-        self.functions
-            .get(function)
-            .params
-            .iter()
-            .zip(args)
-            .map(|(param, arg)| match &param.ty {
-                Some(ty) => arg.fit(ty, &param.name).map(|()| ty.clone()),
-                None => Ok(arg),
-            })
-            .collect()
-    }
-
-    fn body(&mut self, function: FunctionId, args: Vec<Ty>) -> Result<Ty, Error> {
-        let key = (function, args);
-        if let Some(result) = self.checked.get(&key) {
+    /// What `function` returns, given arguments of the types of its parameters.
+    pub(crate) fn result(&mut self, function: FunctionId) -> Result<Ty, Error> {
+        if let Some(result) = self.results.get(&function) {
             return Ok(result.clone());
         }
-        let functions = self.functions;
-        let result = self.check(&functions.get(function).body, &key.1)?;
-        self.checked.insert(key, result.clone());
+        let function_ref = self.functions.get(function);
+        let args = function_ref
+            .params
+            .iter()
+            .map(|param| param.ty.clone())
+            .collect::<Vec<_>>();
+        let result = self
+            .check(&function_ref.body, &args)
+            .map_err(|error| error.in_function(&function_ref.name, None))?;
+        self.results.insert(function, result.clone());
         Ok(result)
+    }
+
+    /// A call from a template. An argument that does not fit its parameter is the caller's error.
+    fn call_at(&mut self, function: FunctionId, args: &[Ty], site: &Span) -> Result<Ty, Error> {
+        for (param, arg) in self.functions.get(function).params.iter().zip(args) {
+            arg.fit(&param.ty, &param.name)
+                .map_err(|error| error.with_span(site))?;
+        }
+        self.result(function)
     }
 
     fn check(&mut self, expr: &Expr, args: &[Ty]) -> Result<Ty, Error> {
@@ -114,7 +113,7 @@ impl<'a> Checker<'a> {
                     .map(|arg| self.check(arg, args))
                     .collect::<Result<Vec<_>, _>>()?;
                 match callee {
-                    Callee::User(function) => self.call_at(*function, types, span),
+                    Callee::User(function) => self.call_at(*function, &types, span),
                     Callee::Map(function) => self.map(*function, types, span),
                     Callee::Concat => concat(&types).map_err(|error| error.with_span(span)),
                     Callee::Element(spec) => {
@@ -131,7 +130,7 @@ impl<'a> Checker<'a> {
             Some(Ty::Never) => Ty::Never,
             other => return Err(Error::not_a_list(span, other.unwrap_or(Ty::Never))),
         };
-        let result = self.call_at(function, vec![item], span)?;
+        let result = self.call_at(function, &[item], span)?;
         Ok(Ty::List(Box::new(result)))
     }
 }

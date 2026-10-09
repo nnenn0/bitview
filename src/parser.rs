@@ -1,9 +1,7 @@
 use crate::{
-    HtmlType, Type,
-    ast::{Def, Param, Syntax},
+    ast::{Def, ParamSyntax, Syntax, TypeSyntax},
     error::{Error, ErrorKind, Span},
     lexer::{NAME_RULE, Spanned, Token, Tokens},
-    types::Ty,
 };
 use std::{iter::Peekable, vec};
 
@@ -121,41 +119,36 @@ impl Parser {
         })
     }
 
-    /// A parameter name, and its type if one follows.
-    fn param(&mut self) -> Result<Param, Error> {
+    /// A parameter name and its type.
+    fn param(&mut self) -> Result<ParamSyntax, Error> {
         let (name, span) = self.name("a parameter name")?;
-        let ty = match self.peek() {
-            Some(Token::Type(_) | Token::LBracket | Token::LBrace) => Some(Ty::from(&self.ty(0)?)),
-            _ => None,
-        };
-        Ok(Param { name, span, ty })
+        if !matches!(
+            self.peek(),
+            Some(Token::Type(_) | Token::LBracket | Token::LBrace)
+        ) {
+            return Err(Error::at(
+                ErrorKind::Syntax,
+                &span,
+                format!("parameter {name} needs a type after it, as in [{name} String]"),
+            ));
+        }
+        let ty = self.ty(0)?;
+        Ok(ParamSyntax { name, span, ty })
     }
 
-    /// A type: one of the [`Type`]s a host passes, written as in `{:tags [String]}`.
-    fn ty(&mut self, depth: usize) -> Result<Type, Error> {
-        let expected = "a type";
-        let Spanned { token, span } = self.next(expected)?;
+    /// A type, written as in `{:tags [String]}`.
+    fn ty(&mut self, depth: usize) -> Result<TypeSyntax, Error> {
+        let Spanned { token, span } = self.next("a type")?;
         let depth = Self::nest(depth, &span)?;
         match token {
-            Token::Type(name) => match name.as_str() {
-                "String" => Ok(Type::String),
-                "Bool" => Ok(Type::Bool),
-                "Flow" => Ok(Type::Html(HtmlType::Flow)),
-                "Phrasing" => Ok(Type::Html(HtmlType::Phrasing)),
-                "Metadata" => Ok(Type::Html(HtmlType::Metadata)),
-                _ => Err(Error::at(
-                    ErrorKind::Syntax,
-                    &span,
-                    format!("unknown type {name}; {TYPES}"),
-                )),
-            },
+            Token::Type(name) => Ok(TypeSyntax::Name(name, span)),
             Token::LBracket => {
                 let item = self.ty(depth)?;
                 self.expect(
                     &Token::RBracket,
                     "`]`; a list type has one item type, as in [String]",
                 )?;
-                Ok(Type::list(item))
+                Ok(TypeSyntax::List(Box::new(item)))
             }
             Token::LBrace => {
                 let fields = self.until(&Token::RBrace, &span, |parser| {
@@ -181,14 +174,16 @@ impl Parser {
                         ));
                     }
                 }
-                Ok(Type::record(
-                    fields.into_iter().map(|(key, _, ty)| (key, ty)),
+                Ok(TypeSyntax::Record(
+                    fields.into_iter().map(|(key, _, ty)| (key, ty)).collect(),
                 ))
             }
             other => Err(Error::at(
                 ErrorKind::Syntax,
                 &span,
-                format!("expected a type, found {other}; {TYPES}"),
+                format!(
+                    "expected a type, found {other}; a type is a name such as String, a list such as [String], or a record such as {{:title String}}"
+                ),
             )),
         }
     }
@@ -301,8 +296,6 @@ impl Parser {
         }
     }
 }
-
-const TYPES: &str = "the types are String, Bool, Flow, Phrasing, Metadata, lists such as [String], and records such as {:title String}";
 
 fn unexpected(expected: &str, found: Option<&Token>, span: &Span) -> Error {
     let message = match found {
