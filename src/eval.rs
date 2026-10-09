@@ -4,6 +4,7 @@ use crate::{
     error::{Error, Span},
     html::{self, ElementSpec, Node},
     resolve::{FunctionId, Functions},
+    types::Ty,
 };
 
 pub(crate) struct Evaluator<'a> {
@@ -15,13 +16,32 @@ impl<'a> Evaluator<'a> {
         Self { functions }
     }
 
-    pub(crate) fn call(&self, function: FunctionId, args: &[Value]) -> Result<Value, Error> {
-        self.eval(&self.functions.get(function).body, args)
+    /// Calls `function`, whose parameters with a type see their arguments narrowed to it.
+    pub(crate) fn call(&self, function: FunctionId, args: Vec<Value>) -> Result<Value, Error> {
+        let args = self.arguments(function, args)?;
+        self.eval(&self.functions.get(function).body, &args)
     }
 
-    fn call_at(&self, function: FunctionId, args: &[Value], site: &Span) -> Result<Value, Error> {
-        self.call(function, args)
+    /// A call from a template, where an argument that does not fit is the caller's error.
+    fn call_at(&self, function: FunctionId, args: Vec<Value>, site: &Span) -> Result<Value, Error> {
+        let args = self
+            .arguments(function, args)
+            .map_err(|error| error.with_span(site))?;
+        self.eval(&self.functions.get(function).body, &args)
             .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
+    }
+
+    fn arguments(&self, function: FunctionId, args: Vec<Value>) -> Result<Vec<Value>, Error> {
+        self.functions
+            .get(function)
+            .params
+            .iter()
+            .zip(args)
+            .map(|(param, arg)| match &param.ty {
+                Some(ty) => narrow(arg, ty, &param.name),
+                None => Ok(arg),
+            })
+            .collect()
     }
 
     fn eval(&self, expr: &Expr, args: &[Value]) -> Result<Value, Error> {
@@ -46,7 +66,7 @@ impl<'a> Evaluator<'a> {
             Expr::Call(callee, call_args, span) => {
                 let values = self.eval_all(call_args, args)?;
                 match callee {
-                    Callee::User(function) => self.call_at(*function, &values, span),
+                    Callee::User(function) => self.call_at(*function, values, span),
                     Callee::Map(function) => self.map(*function, values, span),
                     Callee::Concat => concat(values).map_err(|error| error.with_span(span)),
                     Callee::Element(spec) => element(spec, values)
@@ -75,7 +95,7 @@ impl<'a> Evaluator<'a> {
         match values.into_iter().next() {
             Some(Value::List(items)) => items
                 .into_iter()
-                .map(|item| self.call_at(function, &[item], span))
+                .map(|item| self.call_at(function, vec![item], span))
                 .collect::<Result<_, _>>()
                 .map(Value::List),
             other => Err(Error::not_a_list(
@@ -83,6 +103,48 @@ impl<'a> Evaluator<'a> {
                 other.as_ref().map_or("nothing", Value::type_name),
             )),
         }
+    }
+}
+
+/// `value` as a function with a parameter of type `expected` sees it: a record keeps only the
+/// fields the type lists, and a value that stands for HTML becomes Html. These are the values the
+/// checker gives the type, so that rendering fails where checking does. `path` is as in
+/// [`Ty::fit`].
+fn narrow(value: Value, expected: &Ty, path: &str) -> Result<Value, Error> {
+    match (expected, value) {
+        (Ty::String, value @ Value::String(_)) | (Ty::Bool, value @ Value::Bool(_)) => Ok(value),
+        (Ty::Html(content), value) => {
+            let html = into_html([value])
+                .map_err(|other| Error::argument_mismatch(path, expected, other.type_name()))?;
+            let found = html.content();
+            if found.fits(*content) {
+                Ok(Value::Html(html))
+            } else {
+                Err(Error::argument_content(path, *content, found))
+            }
+        }
+        (Ty::List(item), Value::List(items)) => items
+            .into_iter()
+            .map(|value| narrow(value, item, &format!("{path}[]")))
+            .collect::<Result<_, _>>()
+            .map(Value::List),
+        (Ty::Record(fields), Value::Record(mut values)) => fields
+            .iter()
+            .map(|(name, expected)| {
+                // Templates read the first of repeated fields, so the first is the one kept.
+                let position = values
+                    .iter()
+                    .position(|(key, _)| key == name)
+                    .ok_or_else(|| Error::missing_field(path, name))?;
+                let (_, value) = values.remove(position);
+                Ok((
+                    name.clone(),
+                    narrow(value, expected, &format!("{path}.{name}"))?,
+                ))
+            })
+            .collect::<Result<_, Error>>()
+            .map(Value::Record),
+        (expected, value) => Err(Error::argument_mismatch(path, expected, value.type_name())),
     }
 }
 

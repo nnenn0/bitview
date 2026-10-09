@@ -1,7 +1,9 @@
 use crate::{
-    ast::{Def, Syntax},
+    HtmlType, Type,
+    ast::{Def, Param, Syntax},
     error::{Error, ErrorKind, Span},
-    lexer::{Spanned, Token, Tokens},
+    lexer::{NAME_RULE, Spanned, Token, Tokens},
+    types::Ty,
 };
 use std::{iter::Peekable, vec};
 
@@ -101,9 +103,7 @@ impl Parser {
         };
         let (name, _) = self.name("a function name")?;
         let params_open = self.expect(&Token::LBracket, "`[` and the parameters")?;
-        let params = self.until(&Token::RBracket, &params_open, |parser| {
-            parser.name("a parameter name")
-        })?;
+        let params = self.until(&Token::RBracket, &params_open, Self::param)?;
         let body = self.until(&Token::RParen, &span, |parser| parser.expr(0))?;
         let Ok([body]) = <[Syntax; 1]>::try_from(body) else {
             return Err(Error::at(
@@ -119,6 +119,78 @@ impl Parser {
             body,
             span,
         })
+    }
+
+    /// A parameter name, and its type if one follows.
+    fn param(&mut self) -> Result<Param, Error> {
+        let (name, span) = self.name("a parameter name")?;
+        let ty = match self.peek() {
+            Some(Token::Type(_) | Token::LBracket | Token::LBrace) => Some(Ty::from(&self.ty(0)?)),
+            _ => None,
+        };
+        Ok(Param { name, span, ty })
+    }
+
+    /// A type: one of the [`Type`]s a host passes, written as in `{:tags [String]}`.
+    fn ty(&mut self, depth: usize) -> Result<Type, Error> {
+        let expected = "a type";
+        let Spanned { token, span } = self.next(expected)?;
+        let depth = Self::nest(depth, &span)?;
+        match token {
+            Token::Type(name) => match name.as_str() {
+                "String" => Ok(Type::String),
+                "Bool" => Ok(Type::Bool),
+                "Flow" => Ok(Type::Html(HtmlType::Flow)),
+                "Phrasing" => Ok(Type::Html(HtmlType::Phrasing)),
+                "Metadata" => Ok(Type::Html(HtmlType::Metadata)),
+                _ => Err(Error::at(
+                    ErrorKind::Syntax,
+                    &span,
+                    format!("unknown type {name}; {TYPES}"),
+                )),
+            },
+            Token::LBracket => {
+                let item = self.ty(depth)?;
+                self.expect(
+                    &Token::RBracket,
+                    "`]`; a list type has one item type, as in [String]",
+                )?;
+                Ok(Type::list(item))
+            }
+            Token::LBrace => {
+                let fields = self.until(&Token::RBrace, &span, |parser| {
+                    let expected = "a key, as in :title";
+                    match parser.next(expected)? {
+                        Spanned {
+                            token: Token::Key(key),
+                            span,
+                        } => Ok((key, span, parser.ty(depth)?)),
+                        Spanned { token, span } => Err(unexpected(expected, Some(&token), &span)),
+                    }
+                })?;
+                for (position, (key, span, _)) in fields.iter().enumerate() {
+                    if fields
+                        .iter()
+                        .take(position)
+                        .any(|(earlier, _, _)| earlier == key)
+                    {
+                        return Err(Error::at(
+                            ErrorKind::Name,
+                            span,
+                            format!("field {key} is written twice in the type"),
+                        ));
+                    }
+                }
+                Ok(Type::record(
+                    fields.into_iter().map(|(key, _, ty)| (key, ty)),
+                ))
+            }
+            other => Err(Error::at(
+                ErrorKind::Syntax,
+                &span,
+                format!("expected a type, found {other}; {TYPES}"),
+            )),
+        }
     }
 
     /// The depth one level inside `depth`.
@@ -151,6 +223,13 @@ impl Parser {
                 |parser| parser.entry(depth),
             )?)),
             Token::LParen => self.form(&span, depth),
+            Token::Type(name) => Err(Error::at(
+                ErrorKind::Syntax,
+                &span,
+                format!(
+                    "{name} is a type, which is written only after a parameter name; {NAME_RULE}"
+                ),
+            )),
             Token::Key(_) => Err(Error::at(
                 ErrorKind::Syntax,
                 &span,
@@ -222,6 +301,8 @@ impl Parser {
         }
     }
 }
+
+const TYPES: &str = "the types are String, Bool, Flow, Phrasing, Metadata, lists such as [String], and records such as {:title String}";
 
 fn unexpected(expected: &str, found: Option<&Token>, span: &Span) -> Error {
     let message = match found {

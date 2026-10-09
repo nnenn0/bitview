@@ -173,19 +173,19 @@ fn is_builtin(name: &str) -> bool {
 }
 
 fn resolve_function(def: Def, names: &Names, source: usize) -> Result<Function, Error> {
-    let mut params = Vec::with_capacity(def.params.len());
-    for (name, span) in def.params {
-        if params.contains(&name) {
+    let mut param_names = Vec::with_capacity(def.params.len());
+    for param in &def.params {
+        if param_names.contains(&param.name) {
             return Err(Error::at(
                 ErrorKind::Name,
-                &span,
-                format!("parameter {name} is declared twice"),
+                &param.span,
+                format!("parameter {} is declared twice", param.name),
             ));
         }
-        params.push(name);
+        param_names.push(param.name.clone());
     }
     let scope = Scope {
-        params: &params,
+        params: &param_names,
         names,
         source,
     };
@@ -196,7 +196,7 @@ fn resolve_function(def: Def, names: &Names, source: usize) -> Result<Function, 
         body,
         name: def.name,
         public: def.public,
-        arity: params.len(),
+        params: def.params,
         span: def.span,
         calls,
     })

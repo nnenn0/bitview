@@ -705,6 +705,149 @@ fn check_and_render_report_the_same_error() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn parameter_types_list_what_a_function_reads() -> Result<()> {
+    // Records with more fields than the type lists fit, so one function serves both.
+    let text = "(defn page [ctx] (div (badge ctx.article) (ul (map ctx.entries item))))\n(defn item [entry {:title String :draft Bool}] (li entry.title (badge entry)))\n(defn badge [entry {:draft Bool}] (if entry.draft (span \"draft\") []))";
+    let ctx_type = Type::record([
+        (
+            "article",
+            Type::record([("title", Type::String), ("draft", Type::Bool)]),
+        ),
+        (
+            "entries",
+            Type::list(Type::record([
+                ("title", Type::String),
+                ("url", Type::String),
+                ("draft", Type::Bool),
+            ])),
+        ),
+    ]);
+    let ctx = Value::record([
+        (
+            "article",
+            Value::record([("title", Value::from("A")), ("draft", Value::from(true))]),
+        ),
+        (
+            "entries",
+            Value::from(vec![Value::record([
+                ("title", Value::from("E")),
+                ("url", Value::from("/e")),
+                ("draft", Value::from(false)),
+            ])]),
+        ),
+    ]);
+    parse(text)?.check(&[("page", ctx_type)])?;
+    assert_eq!(
+        render(text, ctx)?,
+        "<div><span>draft</span><ul><li>E</li></ul></div>"
+    );
+    Ok(())
+}
+
+#[test]
+fn parameter_types_are_contracts_on_both_sides() -> Result<()> {
+    let ctx_type = Type::record([("title", Type::String), ("flag", Type::Bool)]);
+    let ctx = Value::record([("title", Value::from("t")), ("flag", Value::from(true))]);
+    for (text, message) in [
+        // The function sees only the fields its type lists.
+        (
+            "(defn page [ctx] (badge ctx))\n(defn badge [entry {:flag Bool}] (p entry.title))",
+            "t.bv:2:43: unknown field \"title\" (fields: flag)\n  in badge (called at t.bv:1:19)\n  in page",
+        ),
+        // A caller must pass what the type lists.
+        (
+            "(defn page [ctx] (badge ctx))\n(defn badge [entry {:draft Bool}] (p \"x\"))",
+            "t.bv:1:19: entry has no field \"draft\", which its type lists\n  in page",
+        ),
+        (
+            "(defn page [ctx] (badge ctx))\n(defn badge [entry {:flag String}] (p entry.flag))",
+            "t.bv:1:19: entry.flag must be String, but got Bool\n  in page",
+        ),
+        (
+            "(defn page [ctx] (p (inline (div ctx.title))))\n(defn inline [x Phrasing] (span x))",
+            "t.bv:1:22: x must hold only text, phrasing elements such as <span> and <a>, but holds block elements such as <p> and <div>\n  in page",
+        ),
+        // The entry's own parameter is checked against what the host passes.
+        (
+            "(defn page [ctx {:items [String]}] (ul ctx.items))",
+            "t.bv:1:1: ctx has no field \"items\", which its type lists\n  in page",
+        ),
+    ] {
+        let checked = check_error(text, &ctx_type)?.to_string();
+        assert_eq!(checked, message, "{text}");
+        assert_eq!(
+            render_error(text, ctx.clone())?.to_string(),
+            message,
+            "{text}"
+        );
+    }
+    // The body is checked with the type, not with what a caller happens to pass, so checking
+    // rejects what rendering this text alone would accept, as with Html that a host passes.
+    let text = "(defn page [ctx] (block ctx.title))\n(defn block [x Flow] (p x))";
+    assert_eq!(
+        check_error(text, &ctx_type)?.to_string(),
+        "t.bv:2:23: <p> cannot contain block elements such as <p> and <div>; it takes text, phrasing elements such as <span> and <a>\n  in block (called at t.bv:1:19)\n  in page"
+    );
+    assert_eq!(render(text, ctx.clone())?, "<p>t</p>");
+    // Text and fragments stand for Html, and an empty list fits a list of any type.
+    let text = "(defn page [ctx] (div (block ctx.title) (block [(p \"a\") \"b\"]) (tags [])))\n(defn block [x Flow] (div x))\n(defn tags [x [String]] (ul (map x tag)))\n(defn tag [x String] (li x))";
+    parse(text)?.check(&[("page", ctx_type)])?;
+    assert_eq!(
+        render(text, ctx)?,
+        "<div><div>t</div><div><p>a</p>b</div><ul></ul></div>"
+    );
+    Ok(())
+}
+
+#[test]
+fn functions_with_typed_parameters_are_checked_without_a_caller() -> Result<()> {
+    let ctx_type = Type::record([("title", Type::String)]);
+    let page = "(defn page [ctx] (p ctx.title))";
+    parse(&format!(
+        "{page}\n(defn card [entry {{:title String}}] (div (heading entry.title)))\n(defn heading [title] (h2 title))"
+    ))?
+    .check(&[("page", ctx_type.clone())])?;
+    let error = check_error(
+        &format!("{page}\n(defn card [entry {{:title String}}] (div entry.titel))"),
+        &ctx_type,
+    )?;
+    assert_eq!(
+        error.to_string(),
+        "t.bv:2:47: unknown field \"titel\" (fields: title)\n  in card"
+    );
+    let error = check_error(
+        &format!("{page}\n(defn card [entry {{:title String}} extra] (div entry.title))"),
+        &ctx_type,
+    )?;
+    assert!(
+        error
+            .message()
+            .starts_with("function card is not called from page"),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn types_are_written_after_parameter_names() -> Result<()> {
+    for (text, kind) in [
+        ("(defn page [ctx Strin] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx [String Bool]] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx []] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx {:a}] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx {a String}] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx {:a String :a Bool}] ctx)", ErrorKind::Name),
+        ("(defn page [String] ctx)", ErrorKind::Syntax),
+        ("(defn page [ctx] (p String))", ErrorKind::Syntax),
+    ] {
+        assert_eq!(parse_error(text)?.kind(), kind, "{text}");
+    }
+    let error = parse_error("(defn page [ctx Strin] ctx)")?;
+    assert!(error.message().contains("String, Bool, Flow"), "{error}");
+    Ok(())
+}
+
 fn post_type() -> Type {
     Type::record([
         ("flag", Type::Bool),

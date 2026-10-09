@@ -59,8 +59,8 @@
       ]
     },
     "definition": {
-      "match": "(\\()\\s*(defn-?)\\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\\s*(\\[)([^\\]]*)",
-      "captures": {
+      "begin": "(\\()\\s*(defn-?)\\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\\s*(\\[)",
+      "beginCaptures": {
         "1": {
           "name": "punctuation.section.parens.bitview"
         },
@@ -72,16 +72,26 @@
         },
         "4": {
           "name": "punctuation.section.parameters.begin.bitview"
-        },
-        "5": {
-          "patterns": [
-            {
-              "name": "variable.parameter.bitview",
-              "match": "[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
-            }
-          ]
         }
-      }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.parameters.end.bitview"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#type"
+        },
+        {
+          "name": "variable.parameter.bitview",
+          "match": "(?<![A-Za-z0-9:.-])[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
+        }
+      ]
     },
     "keyword": {
       "patterns": [
@@ -192,6 +202,55 @@
         {
           "name": "punctuation.section.parens.bitview",
           "match": "[()]"
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "name": "support.type.bitview",
+          "match": "\\b[A-Z][A-Za-z0-9]*\\b"
+        },
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.brackets.bitview"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.brackets.bitview"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.braces.bitview"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.braces.bitview"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#key"
+            },
+            {
+              "include": "#type"
+            }
+          ]
         }
       ]
     }

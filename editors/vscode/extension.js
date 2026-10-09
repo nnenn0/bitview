@@ -4,8 +4,9 @@
 // expressions over the code find definitions and references without a parser.
 
 const NAME = "[a-z][a-z0-9]*(?:-[a-z0-9]+)*";
-const DEFINITION = new RegExp(`\\(\\s*defn(-?)\\s+(${NAME})\\s*\\[([^\\]]*)\\]`, "g");
-const PARAM = new RegExp(NAME, "g");
+const DEFINITION = new RegExp(`\\(\\s*defn(-?)\\s+(${NAME})\\s*\\[`, "g");
+// A parameter name, not a record key after `:` or the lowercase part of a type such as `String`.
+const PARAM = new RegExp(`(?<![A-Za-z0-9:.-])${NAME}`, "y");
 
 /** `text` with strings and comments replaced by spaces, so that every offset stays the same. */
 function codeOnly(text) {
@@ -40,23 +41,46 @@ function codeOnly(text) {
 
 function definitionsIn(text) {
   const found = [];
-  for (const match of codeOnly(text).matchAll(DEFINITION)) {
-    const [, hyphen, name, paramList] = match;
+  const code = codeOnly(text);
+  for (const match of code.matchAll(DEFINITION)) {
+    const [, hyphen, name] = match;
     const nameOffset = match.index + match[0].indexOf(name, match[0].indexOf("defn") + 4);
-    const paramsOffset = match.index + match[0].indexOf("[") + 1;
-    const params = [...paramList.matchAll(PARAM)].map((param) => ({
-      name: param[0],
-      offset: paramsOffset + param.index,
-    }));
+    const params = paramsAt(code, match.index + match[0].length);
     found.push({ name, offset: nameOffset, start: match.index, params, private: hyphen === "-" });
   }
   return found;
 }
 
+/**
+ * The parameter names in the list that starts at `offset`, just after its `[`. Types such as
+ * `[String]` and `{:draft Bool}` follow the names, so only names outside them count.
+ */
+function paramsAt(code, offset) {
+  const params = [];
+  let depth = 0;
+  for (let i = offset; i < code.length; i += 1) {
+    const character = code[i];
+    if (character === "[" || character === "{") depth += 1;
+    else if (character === "}") depth -= 1;
+    else if (character === "]") {
+      if (depth === 0) break;
+      depth -= 1;
+    } else if (depth === 0) {
+      PARAM.lastIndex = i;
+      const param = PARAM.exec(code);
+      if (param) {
+        params.push({ name: param[0], offset: i });
+        i += param[0].length - 1;
+      }
+    }
+  }
+  return params;
+}
+
 /** A parameter hides functions of the same name, so the enclosing function's parameters come first. */
 function symbolAt(text, definitions, wordStart, word) {
-  // A field after `.` and a record key after `:` are not names.
-  if (text[wordStart - 1] === "." || text[wordStart - 1] === ":") return null;
+  // A field after `.`, a record key after `:`, and the rest of a type such as `String` are not names.
+  if (/[.:A-Za-z0-9]/.test(text[wordStart - 1] ?? "")) return null;
   const enclosing = definitions.filter((definition) => definition.start <= wordStart).pop();
   const param = enclosing?.params.find((candidate) => candidate.name === word);
   if (param) return { kind: "param", scope: enclosing.start, declaration: param.offset };

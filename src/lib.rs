@@ -84,7 +84,7 @@ impl Program {
     #[must_use]
     pub fn has_entry(&self, name: &str) -> bool {
         self.function(name)
-            .is_some_and(|function| function.arity == 1)
+            .is_some_and(|function| function.params.len() == 1)
     }
 
     /// Where the public function `name` is defined, which lets a host tie functions to the files
@@ -100,8 +100,9 @@ impl Program {
     /// would meet only with some data is found here. Errors that depend on the values themselves,
     /// such as a URL with a disallowed scheme, remain for rendering.
     ///
-    /// A function is checked only through the calls that reach it, so a function that no entry may
-    /// call is an error: nothing could tell whether it fits the data it is meant for.
+    /// A function whose parameters all have types is checked against them, whether an entry calls
+    /// it or not. Any other function is checked only through the calls that reach it, so one that
+    /// no entry may call is an error: nothing could tell whether it fits the data it is meant for.
     ///
     /// # Errors
     ///
@@ -113,11 +114,24 @@ impl Program {
             let (id, function) = self.entry(entry)?;
             let result = checker
                 .call(id, vec![types::Ty::from(ctx)])
-                .map_err(|error| error.in_function(entry, None))?;
+                .map_err(|error| error.with_span(&function.span).in_function(entry, None))?;
             if !result.is_html() {
                 return Err(Error::not_html(entry, &function.span, result));
             }
             reached.extend(self.functions.used_by(id));
+        }
+        for (id, function) in self.functions.iter() {
+            let types = function
+                .params
+                .iter()
+                .map(|param| param.ty.clone())
+                .collect::<Option<Vec<_>>>();
+            if let (false, Some(types)) = (reached.contains(&id), types) {
+                checker
+                    .call(id, types)
+                    .map_err(|error| error.in_function(&function.name, None))?;
+                reached.extend(self.functions.used_by(id));
+            }
         }
         match self.functions.iter().find(|(id, _)| !reached.contains(id)) {
             Some((_, function)) => Err(Error::at(
@@ -147,8 +161,8 @@ impl Program {
     pub fn render(&self, entry: &str, ctx: Value) -> Result<Html, Error> {
         let (id, function) = self.entry(entry)?;
         let result = eval::Evaluator::new(&self.functions)
-            .call(id, &[ctx])
-            .map_err(|error| error.in_function(entry, None))?;
+            .call(id, vec![ctx])
+            .map_err(|error| error.with_span(&function.span).in_function(entry, None))?;
         eval::into_html([result])
             .map_err(|other| Error::not_html(entry, &function.span, other.type_name()))
     }
@@ -172,7 +186,7 @@ impl Program {
             }
         })?;
         let function = self.functions.get(id);
-        if function.arity != 1 {
+        if function.params.len() != 1 {
             return Err(Error::at(
                 ErrorKind::Arity,
                 &function.span,
