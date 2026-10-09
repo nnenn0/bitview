@@ -1,2 +1,2 @@
-(defn home-link [ctx]
-  (a {:href "/"} ctx.site.title))
+(defn home-link [site Site]
+  (a {:href "/"} site.title))

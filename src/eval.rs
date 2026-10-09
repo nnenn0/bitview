@@ -16,32 +16,23 @@ impl<'a> Evaluator<'a> {
         Self { functions }
     }
 
-    /// Calls `function`, whose parameters with a type see their arguments narrowed to it.
+    /// Calls `function` with values from the host, narrowed to the types of its parameters. The
+    /// templates were checked when they were loaded, so the calls among them pass values that fit.
     pub(crate) fn call(&self, function: FunctionId, args: Vec<Value>) -> Result<Value, Error> {
-        let args = self.arguments(function, args)?;
-        self.eval(&self.functions.get(function).body, &args)
-    }
-
-    /// A call from a template, where an argument that does not fit is the caller's error.
-    fn call_at(&self, function: FunctionId, args: Vec<Value>, site: &Span) -> Result<Value, Error> {
-        let args = self
-            .arguments(function, args)
-            .map_err(|error| error.with_span(site))?;
-        self.eval(&self.functions.get(function).body, &args)
-            .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
-    }
-
-    fn arguments(&self, function: FunctionId, args: Vec<Value>) -> Result<Vec<Value>, Error> {
-        self.functions
-            .get(function)
+        let function_ref = self.functions.get(function);
+        let args = function_ref
             .params
             .iter()
             .zip(args)
-            .map(|(param, arg)| match &param.ty {
-                Some(ty) => narrow(arg, ty, &param.name),
-                None => Ok(arg),
-            })
-            .collect()
+            .map(|(param, arg)| narrow(arg, &param.ty, &param.name))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.eval(&function_ref.body, &args)
+    }
+
+    fn call_at(&self, function: FunctionId, args: &[Value], site: &Span) -> Result<Value, Error> {
+        let function_ref = self.functions.get(function);
+        self.eval(&function_ref.body, args)
+            .map_err(|error| error.in_function(&function_ref.name, Some(site)))
     }
 
     fn eval(&self, expr: &Expr, args: &[Value]) -> Result<Value, Error> {
@@ -66,7 +57,7 @@ impl<'a> Evaluator<'a> {
             Expr::Call(callee, call_args, span) => {
                 let values = self.eval_all(call_args, args)?;
                 match callee {
-                    Callee::User(function) => self.call_at(*function, values, span),
+                    Callee::User(function) => self.call_at(*function, &values, span),
                     Callee::Map(function) => self.map(*function, values, span),
                     Callee::Concat => concat(values).map_err(|error| error.with_span(span)),
                     Callee::Element(spec) => element(spec, values)
@@ -95,7 +86,7 @@ impl<'a> Evaluator<'a> {
         match values.into_iter().next() {
             Some(Value::List(items)) => items
                 .into_iter()
-                .map(|item| self.call_at(function, vec![item], span))
+                .map(|item| self.call_at(function, &[item], span))
                 .collect::<Result<_, _>>()
                 .map(Value::List),
             other => Err(Error::not_a_list(
@@ -106,10 +97,9 @@ impl<'a> Evaluator<'a> {
     }
 }
 
-/// `value` as a function with a parameter of type `expected` sees it: a record keeps only the
-/// fields the type lists, and a value that stands for HTML becomes Html. These are the values the
-/// checker gives the type, so that rendering fails where checking does. `path` is as in
-/// [`Ty::fit`].
+/// A host's `value` as a parameter of type `expected` sees it: a record keeps only the fields the
+/// type lists, and a value that stands for HTML becomes Html. A value that does not fit fails as
+/// [`Ty::fit`] fails for its type, and `path` is as there.
 fn narrow(value: Value, expected: &Ty, path: &str) -> Result<Value, Error> {
     match (expected, value) {
         (Ty::String, value @ Value::String(_)) | (Ty::Bool, value @ Value::Bool(_)) => Ok(value),

@@ -1,15 +1,24 @@
 //! bitview: a small, pure functional language that builds HTML from data.
 //!
 //! A program is a set of functions written in one or more sources. The host reads the sources,
-//! passes them to [`Program::parse`], and renders a page by calling one function with one value:
+//! passes them to [`Program::parse`] with the types it names for the templates, and renders a
+//! page by calling one function with one value:
 //!
 //! ```
-//! use bitview::{Html, Program, Source, Value};
+//! use bitview::{Html, HtmlType, Program, Source, Type, Value};
 //!
-//! let program = Program::parse(&[Source {
-//!     name: "page.bv",
-//!     text: r#"(defn page [ctx] (html (body (h1 ctx.title) ctx.content)))"#,
-//! }])?;
+//! let page_type = Type::record([
+//!     ("title", Type::String),
+//!     ("content", Type::Html(HtmlType::Flow)),
+//! ]);
+//! let program = Program::parse(
+//!     &[Source {
+//!         name: "page.bv",
+//!         text: r#"(defn page [ctx Page] (html (body (h1 ctx.title) ctx.content)))"#,
+//!     }],
+//!     &[("Page", page_type.clone())],
+//! )?;
+//! program.check(&[("page", page_type)])?;
 //! let ctx = Value::record([
 //!     ("title", Value::from("<Hello>")),
 //!     ("content", Value::from(Html::text("Body"))),
@@ -41,7 +50,7 @@ pub use value::Value;
 
 use ast::Function;
 use resolve::{FunctionId, Functions};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 /// A template source and the name errors use for it, such as `views/pages/page.bv`.
 #[derive(Debug, Clone, Copy)]
@@ -61,12 +70,19 @@ pub struct Program {
 }
 
 impl Program {
-    /// Parses all sources and checks names, arities, and the absence of recursion.
+    /// Parses all sources and checks them: names, arities, the absence of recursion, and the
+    /// types of every function. Each parameter has a type, written with the built-in types and
+    /// `types`, the host's named types, such as `("Entry", Type::record(…))`. A function is checked
+    /// once, with its parameters' types in place of values: every field it reads exists, every
+    /// value fits where it is used, and every call passes arguments that fit. Both sides of every
+    /// `if` and the function of every `map` are checked, so an error that rendering would meet only
+    /// with some data is found here. Errors that depend on the values themselves, such as a URL
+    /// with a disallowed scheme, remain for rendering.
     ///
     /// # Errors
     ///
-    /// Returns the first syntax, name, arity, or recursion error, with its position.
-    pub fn parse(sources: &[Source<'_>]) -> Result<Self, Error> {
+    /// Returns the first error, with its position and the function that has it.
+    pub fn parse(sources: &[Source<'_>], types: &[(&str, Type)]) -> Result<Self, Error> {
         let defs = sources
             .iter()
             .map(|source| {
@@ -74,9 +90,9 @@ impl Program {
                 parser::parse(lexer::tokenize(&name, source.text)?)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
-            functions: resolve::resolve(defs)?,
-        })
+        let functions = resolve::resolve(defs, types)?;
+        check::Checker::new(&functions).check_all()?;
+        Ok(Self { functions })
     }
 
     /// Whether `name` is a public function with one parameter, which [`Program::render`] can
@@ -94,61 +110,28 @@ impl Program {
         self.function(name).map(|function| &function.span)
     }
 
-    /// Checks that each entry renders every value of its type without a type or field error: every
-    /// field it may read exists, every value fits where it is used, and the result is Html. Both
-    /// sides of every `if` and the function of every `map` are checked, so an error that rendering
-    /// would meet only with some data is found here. Errors that depend on the values themselves,
-    /// such as a URL with a disallowed scheme, remain for rendering.
-    ///
-    /// A function whose parameters all have types is checked against them, whether an entry calls
-    /// it or not. Any other function is checked only through the calls that reach it, so one that
-    /// no entry may call is an error: nothing could tell whether it fits the data it is meant for.
+    /// Checks that the host can render each entry with values of the type it gives: the type
+    /// fits the entry's parameter, and the entry returns Html.
     ///
     /// # Errors
     ///
-    /// Returns the first error, with its position and the functions that were being checked.
+    /// Returns the first entry that is missing, takes a type that the given one does not fit, or
+    /// does not return Html.
     pub fn check(&self, entries: &[(&str, Type)]) -> Result<(), Error> {
         let mut checker = check::Checker::new(&self.functions);
-        let mut reached = HashSet::new();
         for (entry, ctx) in entries {
             let (id, function) = self.entry(entry)?;
-            let result = checker
-                .call(id, vec![types::Ty::from(ctx)])
-                .map_err(|error| error.with_span(&function.span).in_function(entry, None))?;
+            for param in &function.params {
+                types::Ty::from(ctx)
+                    .fit(&param.ty, &param.name)
+                    .map_err(|error| error.with_span(&function.span).in_function(entry, None))?;
+            }
+            let result = checker.result(id)?;
             if !result.is_html() {
                 return Err(Error::not_html(entry, &function.span, result));
             }
-            reached.extend(self.functions.used_by(id));
         }
-        for (id, function) in self.functions.iter() {
-            let types = function
-                .params
-                .iter()
-                .map(|param| param.ty.clone())
-                .collect::<Option<Vec<_>>>();
-            if let (false, Some(types)) = (reached.contains(&id), types) {
-                checker
-                    .call(id, types)
-                    .map_err(|error| error.in_function(&function.name, None))?;
-                reached.extend(self.functions.used_by(id));
-            }
-        }
-        match self.functions.iter().find(|(id, _)| !reached.contains(id)) {
-            Some((_, function)) => Err(Error::at(
-                ErrorKind::Name,
-                &function.span,
-                format!(
-                    "function {} is not called from {}, so it cannot be checked; call it or remove it",
-                    function.name,
-                    entries
-                        .iter()
-                        .map(|(entry, _)| *entry)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            )),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// Calls the public function `entry` with `ctx` and returns the HTML it builds.

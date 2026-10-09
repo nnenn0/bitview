@@ -5,17 +5,29 @@ pub(crate) struct Def {
     /// Whether other sources and the host can call it. `defn-` defines a function that only its
     /// own source can call.
     pub(crate) public: bool,
-    pub(crate) params: Vec<Param>,
+    pub(crate) params: Vec<ParamSyntax>,
     pub(crate) body: Syntax,
     pub(crate) span: Span,
 }
 
-pub(crate) struct Param {
+pub(crate) struct ParamSyntax {
     pub(crate) name: String,
     pub(crate) span: Span,
-    /// The type written after the name. A record type lists the fields the function may read,
-    /// and a caller may pass a record with more; the function sees only the listed ones.
-    pub(crate) ty: Option<Ty>,
+    pub(crate) ty: TypeSyntax,
+}
+
+/// A type as written. Names are resolved with the host's types, so the parser keeps them.
+pub(crate) enum TypeSyntax {
+    Name(String, Span),
+    List(Box<TypeSyntax>),
+    Record(Vec<(String, TypeSyntax)>),
+}
+
+pub(crate) struct Param {
+    pub(crate) name: String,
+    /// A record type lists the fields the function may read, and a caller may pass a record with
+    /// more.
+    pub(crate) ty: Ty,
 }
 
 pub(crate) enum Syntax {
