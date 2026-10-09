@@ -19,6 +19,9 @@
       "include": "#call"
     },
     {
+      "include": "#type-name"
+    },
+    {
       "include": "#key"
     },
     {
@@ -208,8 +211,7 @@
     "type": {
       "patterns": [
         {
-          "name": "support.type.bitview",
-          "match": "\\b[A-Z][A-Za-z0-9]*\\b"
+          "include": "#type-name"
         },
         {
           "begin": "\\[",
@@ -253,6 +255,10 @@
           ]
         }
       ]
+    },
+    "type-name": {
+      "name": "support.type.bitview",
+      "match": "\\b[A-Z][A-Za-z0-9]*\\b"
     }
   }
 }

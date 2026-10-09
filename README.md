@@ -163,6 +163,18 @@ let program = Program::parse(&sources, &[("Tag", tag), ("TagsPage", page)])?;
   (li (a {:href tag.url} tag.name)))
 ```
 
+`declare_types(&types)` は、名前の付いた型を、テンプレートで型を書くときと同じ構文で書き出す。ほかの名前付きの型と同じ部分は、その名前で書く。
+
+```text
+Tag {:name String
+     :url String}
+
+TagsPage {:title String
+          :tags [Tag]}
+```
+
+ホストがこれを出力するコマンド（genbit なら `genbit types`）を持てば、VS Code の拡張機能が、型の名前から宣言へ移動したり、ホバーで中身を表示したりできる。
+
 データを作るホストが型も定義するので、テンプレートとホストで同じ形を二重に書かずに済む。部品は、ページの型を受け取る代わりに、`[page {:site Site :style Metadata}]` のように自分が読む部分だけを書けば、どのページの値もそのまま受け取れる。
 
 ### 値と Html
