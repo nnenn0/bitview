@@ -1,4 +1,4 @@
-use crate::html::ElementSpec;
+use crate::{content::Content, html::ElementSpec, types::Ty};
 use std::{fmt, sync::Arc};
 
 /// A position in a template source, counted in characters from 1.
@@ -222,6 +222,33 @@ impl Error {
         Self::new(
             ErrorKind::Type,
             format!("a {found} cannot be a child of <{}>{hint}", spec.name),
+        )
+    }
+
+    /// An argument, or the part of it at `path` such as `entry.tags[]`, does not fit the type
+    /// written for the parameter.
+    pub(crate) fn argument_mismatch(path: &str, expected: &Ty, found: impl fmt::Display) -> Self {
+        Self::new(
+            ErrorKind::Type,
+            format!("{path} must be {expected}, but got {found}"),
+        )
+    }
+
+    pub(crate) fn argument_content(path: &str, expected: Content, found: Content) -> Self {
+        Self::new(
+            ErrorKind::Html,
+            format!(
+                "{path} must hold only {}, but holds {}",
+                expected.description(),
+                found.description()
+            ),
+        )
+    }
+
+    pub(crate) fn missing_field(path: &str, field: &str) -> Self {
+        Self::new(
+            ErrorKind::Field,
+            format!("{path} has no field {field:?}, which its type lists"),
         )
     }
 

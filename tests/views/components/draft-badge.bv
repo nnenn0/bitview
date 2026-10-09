@@ -1,2 +1,2 @@
-(defn draft-badge [entry]
+(defn draft-badge [entry {:draft Bool}]
   (if entry.draft (span {:class "draft-badge"} "draft") []))

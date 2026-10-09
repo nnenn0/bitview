@@ -9,6 +9,8 @@ pub(crate) enum Token {
     /// A record key, as `:lang` in `{:lang "ja"}`.
     Key(String),
     Str(String),
+    /// A capitalized word, which names a type, as `String` in `[title String]`.
+    Type(String),
     Defn,
     /// `defn-`, which defines a function that only its own source can call.
     DefnPrivate,
@@ -28,6 +30,7 @@ impl fmt::Display for Token {
             Self::Field(name) => return write!(formatter, "`.{name}`"),
             Self::Key(name) => return write!(formatter, "`:{name}`"),
             Self::Str(_) => return formatter.write_str("a string"),
+            Self::Type(name) => return write!(formatter, "the type `{name}`"),
             Self::Defn => "defn",
             Self::DefnPrivate => "defn-",
             Self::If => "if",
@@ -108,7 +111,8 @@ pub(crate) fn tokenize(source: &Arc<str>, text: &str) -> Result<Tokens, Error> {
                 lexer.fields(&mut list)?;
                 continue;
             }
-            'A'..='Z' | '_' => return Err(Error::at(ErrorKind::Syntax, &span, NAME_RULE)),
+            'A'..='Z' => Token::Type(lexer.type_name(character)),
+            '_' => return Err(Error::at(ErrorKind::Syntax, &span, NAME_RULE)),
             other => {
                 return Err(Error::at(
                     ErrorKind::Syntax,
@@ -122,7 +126,7 @@ pub(crate) fn tokenize(source: &Arc<str>, text: &str) -> Result<Tokens, Error> {
 }
 
 /// Names look like CSS class names, so that a function and its CSS file can share one.
-const NAME_RULE: &str =
+pub(crate) const NAME_RULE: &str =
     "names are lowercase letters and digits, with words joined by single hyphens, as in entry-list";
 
 fn keyword_or_name(name: String) -> Token {
@@ -204,6 +208,19 @@ impl Lexer<'_> {
     fn ident(&mut self, first: char, start: &Span) -> Result<String, Error> {
         let word = self.word(first);
         self.name(word, start)
+    }
+
+    /// Reads the letters and digits that start with `first`, an uppercase letter.
+    fn type_name(&mut self, first: char) -> String {
+        let mut name = String::from(first);
+        while let Some(&character) = self.chars.peek() {
+            if !character.is_ascii_alphanumeric() {
+                break;
+            }
+            name.push(character);
+            self.bump();
+        }
+        name
     }
 
     /// Reads the lowercase letters, digits, and hyphens that start with `first`.

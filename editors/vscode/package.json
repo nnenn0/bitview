@@ -2,7 +2,7 @@
   "name": "bitview",
   "displayName": "bitview",
   "description": "Syntax highlighting, go to definition, and references for bitview templates",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "nnenn0",
   "license": "MIT",
   "repository": {

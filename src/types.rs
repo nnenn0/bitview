@@ -198,6 +198,31 @@ impl Ty {
         }
     }
 
+    /// Checks that a value of this type may be passed where `expected` is written. A record may
+    /// have more fields than `expected` lists. `path` names the value in errors, as `entry.tags[]`
+    /// for the items of the field `tags` of the parameter `entry`.
+    pub(crate) fn fit(&self, expected: &Self, path: &str) -> Result<(), Error> {
+        match (self, expected) {
+            (Self::Never, _) | (Self::String, Self::String) | (Self::Bool, Self::Bool) => Ok(()),
+            (found, Self::Html(content)) => match found.content() {
+                Some(found) if found.fits(*content) => Ok(()),
+                Some(found) => Err(Error::argument_content(path, *content, found)),
+                None => Err(Error::argument_mismatch(path, expected, found)),
+            },
+            (Self::List(found), Self::List(item)) => found.fit(item, &format!("{path}[]")),
+            (Self::Record(found), Self::Record(fields)) => {
+                fields.iter().try_for_each(|(name, expected)| {
+                    let (_, value) = found
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .ok_or_else(|| Error::missing_field(path, name))?;
+                    value.fit(expected, &format!("{path}.{name}"))
+                })
+            }
+            (found, expected) => Err(Error::argument_mismatch(path, expected, found)),
+        }
+    }
+
     pub(crate) fn is_html(&self) -> bool {
         self.content().is_some()
     }

@@ -9,5 +9,5 @@
         (dt "tags") (dd (map ctx.article.tags tag-link)))
       ctx.content)))
 
-(defn- tag-link [tag]
+(defn- tag-link [tag {:url String :name String}]
   (a {:href tag.url} tag.name))

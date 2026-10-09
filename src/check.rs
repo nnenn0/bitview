@@ -26,7 +26,36 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Checks a call of `function`. A parameter with a type sees that type, whatever the argument
+    /// that fits it, so a function whose parameters all have types is checked once.
     pub(crate) fn call(&mut self, function: FunctionId, args: Vec<Ty>) -> Result<Ty, Error> {
+        let args = self.arguments(function, args)?;
+        self.body(function, args)
+    }
+
+    /// A call from a template, where an argument that does not fit is the caller's error.
+    fn call_at(&mut self, function: FunctionId, args: Vec<Ty>, site: &Span) -> Result<Ty, Error> {
+        let args = self
+            .arguments(function, args)
+            .map_err(|error| error.with_span(site))?;
+        self.body(function, args)
+            .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
+    }
+
+    fn arguments(&self, function: FunctionId, args: Vec<Ty>) -> Result<Vec<Ty>, Error> {
+        self.functions
+            .get(function)
+            .params
+            .iter()
+            .zip(args)
+            .map(|(param, arg)| match &param.ty {
+                Some(ty) => arg.fit(ty, &param.name).map(|()| ty.clone()),
+                None => Ok(arg),
+            })
+            .collect()
+    }
+
+    fn body(&mut self, function: FunctionId, args: Vec<Ty>) -> Result<Ty, Error> {
         let key = (function, args);
         if let Some(result) = self.checked.get(&key) {
             return Ok(result.clone());
@@ -35,11 +64,6 @@ impl<'a> Checker<'a> {
         let result = self.check(&functions.get(function).body, &key.1)?;
         self.checked.insert(key, result.clone());
         Ok(result)
-    }
-
-    fn call_at(&mut self, function: FunctionId, args: Vec<Ty>, site: &Span) -> Result<Ty, Error> {
-        self.call(function, args)
-            .map_err(|error| error.in_function(&self.functions.get(function).name, Some(site)))
     }
 
     fn check(&mut self, expr: &Expr, args: &[Ty]) -> Result<Ty, Error> {
