@@ -3,20 +3,20 @@
 HTML を文字列ではなく値として組み立てる、小さい純粋関数型のテンプレート言語。描画の前にテンプレートを型で検査し、エスケープの漏れやスクリプトを書く手段を持たない。
 
 ```clojure
-(defn page [ctx ArticlePage]
+(defn entry [ctx EntryPage]
   (html {:lang "ja"}
-    (head (title (concat ctx.article.title " | " ctx.site.title)))
+    (head (title (concat ctx.entry.title " | " ctx.site.title)))
     (body
       (article
-        (h1 ctx.article.title)
-        (ul (map ctx.article.tags tag-item))
+        (h1 ctx.entry.title)
+        (ul (map ctx.entry.tags tag-item))
         ctx.content))))
 
 (defn- tag-item [tag {:url String :name String}]
   (li (a {:href tag.url} tag.name)))
 ```
 
-`ArticlePage` は、ホストが Rust で定義して名前を付けた型である。
+`EntryPage` は、ホストが Rust で定義して名前を付けた型である。
 
 > [!NOTE]
 > bitviewは、静的サイトジェネレーター [genbit](https://github.com/nnenn0/genbit) のテンプレートを書くために作っている個人用の言語で、genbit から Rust のクレートとして使う。構文、標準の要素と属性、Rust の API は、どの版でも互換性なく変わる可能性がある。使う場合は版のタグを固定すること。

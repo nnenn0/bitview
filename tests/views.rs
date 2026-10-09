@@ -35,7 +35,7 @@ fn types() -> Vec<(&'static str, Type)> {
         ("url", Type::String),
         ("og-image", Type::String),
     ]);
-    let index = Type::record([
+    let search = Type::record([
         ("url", Type::String),
         ("json-ld", Type::Html(HtmlType::Metadata)),
     ]);
@@ -55,29 +55,30 @@ fn types() -> Vec<(&'static str, Type)> {
         ("tags", Type::list(tag_link.clone())),
         ("draft", Type::Bool),
     ]);
-    // Every page has the site and its CSS, and every page a search engine indexes has an index.
+    // Every page has the site and its CSS. A page that search engines index has what they read:
+    // the canonical URL and the structured data.
     let page = |indexed: bool, fields: Vec<(&str, Type)>| {
         let mut all = vec![
             ("site", site.clone()),
             ("style", Type::Html(HtmlType::Metadata)),
         ];
         if indexed {
-            all.push(("index", index.clone()));
+            all.push(("search", search.clone()));
         }
         all.extend(fields);
         Type::record(all)
     };
     vec![
         (
-            "RootPage",
+            "HomePage",
             page(true, vec![("entries", Type::list(entry.clone()))]),
         ),
         (
-            "ArticlePage",
+            "EntryPage",
             page(
                 true,
                 vec![
-                    ("article", entry.clone()),
+                    ("entry", entry.clone()),
                     ("content", Type::Html(HtmlType::Flow)),
                 ],
             ),
@@ -98,7 +99,7 @@ fn types() -> Vec<(&'static str, Type)> {
         ),
         ("NotFoundPage", page(false, Vec::new())),
         ("Site", site),
-        ("Index", index),
+        ("Search", search),
         ("Entry", entry),
         ("Timestamp", timestamp),
         ("TagLink", tag_link),
@@ -139,7 +140,7 @@ fn ctx(fields: Vec<(&str, Value)>) -> Result<Value> {
 
 fn indexed(url: &str, json: &str, fields: Vec<(&str, Value)>) -> Result<Value> {
     let mut all = vec![(
-        "index",
+        "search",
         Value::record([
             ("url", Value::from(url)),
             (
@@ -229,20 +230,20 @@ fn body(header: &str, main: &str) -> String {
 const HOME_LINK: &str = "<a href=\"/\">Blog &amp; &lt;Notes&gt;</a>";
 
 #[test]
-fn article_page() -> Result<()> {
+fn entry_page() -> Result<()> {
     let content = Html::element("p", Vec::new(), Html::text("Markdown body & <text>"))?;
     let ctx = indexed(
         "https://example.com/entries/hello/",
         "{\"@type\":\"BlogPosting\"}",
         vec![
             (
-                "article",
+                "entry",
                 entry("Hello <World>", "hello", &["rust", "web"], true),
             ),
             ("content", Value::from(content)),
         ],
     )?;
-    let page = program()?.render("page", ctx)?.to_document()?;
+    let page = program()?.render("entry", ctx)?.to_document()?;
     let title = format!("Hello &lt;World&gt; | {SITE_TITLE}");
     let expected = head(&title)
         + &seo(
@@ -285,7 +286,7 @@ fn entries() -> Value {
 fn home_page() -> Result<()> {
     let json = "{\"@type\":\"WebSite\"}";
     let ctx = indexed("https://example.com/", json, vec![("entries", entries())])?;
-    let page = program()?.render("root", ctx)?.to_document()?;
+    let page = program()?.render("home", ctx)?.to_document()?;
     let expected = head(SITE_TITLE)
         + &seo(
             SITE_TITLE,
@@ -375,7 +376,7 @@ fn not_found_page() -> Result<()> {
 #[test]
 fn entry_functions_are_known_by_name() -> Result<()> {
     let program = program()?;
-    for entry in ["root", "page", "tags", "tag", "not-found"] {
+    for entry in ["home", "entry", "tags", "tag", "not-found"] {
         assert!(program.has_entry(entry), "{entry}");
     }
     assert!(!program.has_entry("layout"));
@@ -391,12 +392,12 @@ fn pages_use_functions_from_the_document_to_the_page() -> Result<()> {
     let base = ["document", "layout"];
     for (entry, own) in [
         (
-            "page",
-            &["home-link", "draft-badge", "timestamp", "page"][..],
+            "entry",
+            &["home-link", "draft-badge", "timestamp", "entry"][..],
         ),
         (
-            "root",
-            &["timestamp", "draft-badge", "entry-list", "root"][..],
+            "home",
+            &["timestamp", "draft-badge", "entry-list", "home"][..],
         ),
         (
             "tag",
@@ -418,8 +419,8 @@ fn pages_use_functions_from_the_document_to_the_page() -> Result<()> {
 fn every_page_takes_the_type_genbit_gives_it() -> Result<()> {
     let program = program()?;
     let pages = [
-        ("root", "RootPage"),
-        ("page", "ArticlePage"),
+        ("home", "HomePage"),
+        ("entry", "EntryPage"),
         ("tags", "TagsPage"),
         ("tag", "TagPage"),
         ("not-found", "NotFoundPage"),
@@ -429,12 +430,12 @@ fn every_page_takes_the_type_genbit_gives_it() -> Result<()> {
     .collect::<Result<Vec<_>>>()?;
     program.check(&pages)?;
     let error = program
-        .check(&[("page", page_type("NotFoundPage")?)])
+        .check(&[("entry", page_type("NotFoundPage")?)])
         .err()
-        .ok_or("checked the article page with the type of the 404 page")?;
+        .ok_or("checked the entry page with the type of the 404 page")?;
     assert_eq!(
         error.to_string(),
-        "views/pages/page.bv:1:1: ctx has no field \"index\", which its type lists\n  in page"
+        "views/pages/entry.bv:1:1: ctx has no field \"search\", which its type lists\n  in entry"
     );
     Ok(())
 }
