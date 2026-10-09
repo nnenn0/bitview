@@ -67,7 +67,7 @@ genbit と同じく、Git の依存として版のタグで参照する。
 
 ```toml
 [dependencies]
-bitview = { git = "https://github.com/nnenn0/bitview", tag = "v0.2.0" }
+bitview = { git = "https://github.com/nnenn0/bitview", tag = "v0.3.0" }
 ```
 
 ホストは、テンプレートで使う型に名前を付け、ソースと一緒に `Program::parse` に渡す。`Program::parse` は、すべての関数をその時点で検査する。ホストは、入口の関数が自分の渡す型の値を受け取れることを `Program::check` で確かめてから、値を渡して描画する。
