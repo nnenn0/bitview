@@ -35,6 +35,63 @@ pub(crate) const BUILT_IN: [(&str, Type); 5] = [
     ("Metadata", Type::Html(HtmlType::Metadata)),
 ];
 
+/// Writes the types a host names for the templates as declarations in the syntax that templates
+/// write types in, one per type, such as `Tag {:name String :url String}`, for people and editors
+/// to read. A part that equals a named type, built in or in `types`, is written by that name.
+#[must_use]
+pub fn declare_types(types: &[(&str, Type)]) -> String {
+    let names = BUILT_IN
+        .iter()
+        .chain(types)
+        .map(|(name, ty)| (*name, ty))
+        .collect::<Vec<_>>();
+    types
+        .iter()
+        .map(|(name, ty)| {
+            // The fields of a record go one per line, under the first.
+            let body = match ty {
+                Type::Record(fields) if !fields.is_empty() => {
+                    let indent = format!("\n{}", " ".repeat(name.len() + 2));
+                    let fields = fields
+                        .iter()
+                        .map(|(key, ty)| format!(":{key} {}", write_type(ty, &names)))
+                        .collect::<Vec<_>>();
+                    format!("{{{}}}", fields.join(&indent))
+                }
+                other => write_structure(other, &names),
+            };
+            format!("{name} {body}\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn write_type(ty: &Type, names: &[(&str, &Type)]) -> String {
+    match names.iter().find(|(_, named)| *named == ty) {
+        Some((name, _)) => (*name).to_owned(),
+        None => write_structure(ty, names),
+    }
+}
+
+fn write_structure(ty: &Type, names: &[(&str, &Type)]) -> String {
+    match ty {
+        Type::String => "String".to_owned(),
+        Type::Bool => "Bool".to_owned(),
+        Type::Html(HtmlType::Flow) => "Flow".to_owned(),
+        Type::Html(HtmlType::Phrasing) => "Phrasing".to_owned(),
+        Type::Html(HtmlType::Metadata) => "Metadata".to_owned(),
+        Type::List(item) => format!("[{}]", write_type(item, names)),
+        Type::Record(fields) => format!(
+            "{{{}}}",
+            fields
+                .iter()
+                .map(|(key, ty)| format!(":{key} {}", write_type(ty, names)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    }
+}
+
 impl HtmlType {
     fn content(self) -> Content {
         match self {

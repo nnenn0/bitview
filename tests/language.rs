@@ -1,4 +1,6 @@
-use bitview::{Error as BitviewError, ErrorKind, Html, HtmlType, Program, Source, Type, Value};
+use bitview::{
+    Error as BitviewError, ErrorKind, Html, HtmlType, Program, Source, Type, Value, declare_types,
+};
 use std::error::Error;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -590,6 +592,57 @@ fn host_types_are_named_for_the_templates() -> Result<()> {
             .err()
             .ok_or("accepted a wrong type name")?;
         assert_eq!(error.message(), message);
+    }
+    Ok(())
+}
+
+#[test]
+fn host_types_are_declared_in_template_syntax() -> Result<()> {
+    let tag = Type::record([("name", Type::String), ("url", Type::String)]);
+    let types = [
+        ("Title", Type::String),
+        ("Tag", tag.clone()),
+        (
+            "TagsPage",
+            Type::record([
+                ("title", Type::String),
+                ("style", Type::Html(HtmlType::Metadata)),
+                ("tags", Type::list(tag)),
+                ("meta", Type::record([("draft", Type::Bool)])),
+            ]),
+        ),
+        ("Empty", Type::record::<&str>([])),
+    ];
+    let declared = declare_types(&types);
+    assert_eq!(
+        declared,
+        concat!(
+            "Title String\n",
+            "\n",
+            "Tag {:name String\n",
+            "     :url String}\n",
+            "\n",
+            "TagsPage {:title String\n",
+            "          :style Metadata\n",
+            "          :tags [Tag]\n",
+            "          :meta {:draft Bool}}\n",
+            "\n",
+            "Empty {}\n",
+        )
+    );
+    // Each declaration is a type that templates can write.
+    for declaration in declared.split("\n\n") {
+        let (_, ty) = declaration
+            .split_once(' ')
+            .ok_or("a declaration without a type")?;
+        let text = format!("(defn page [ctx {}] (p))", ty.trim_end());
+        Program::parse(
+            &[Source {
+                name: "t.bv",
+                text: &text,
+            }],
+            &types,
+        )?;
     }
     Ok(())
 }

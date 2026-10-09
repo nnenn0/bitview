@@ -1,8 +1,8 @@
 {
   "name": "bitview",
   "displayName": "bitview",
-  "description": "Syntax highlighting, go to definition, and references for bitview templates",
-  "version": "0.7.0",
+  "description": "Syntax highlighting, go to definition, references, and type hovers for bitview templates",
+  "version": "0.8.0",
   "publisher": "nnenn0",
   "license": "MIT",
   "repository": {
@@ -54,6 +54,25 @@
         "editor.tabSize": 2,
         "editor.insertSpaces": true
       }
+    },
+    "configuration": {
+      "title": "bitview",
+      "properties": {
+        "bitview.typesCommand": {
+          "type": "string",
+          "default": "genbit types",
+          "description": "The command that prints the types the host names for the templates, one declaration per paragraph. It runs in the directory that holds views/."
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The host's types come from running bitview.typesCommand, which runs only in a trusted workspace.",
+      "restrictedConfigurations": [
+        "bitview.typesCommand"
+      ]
     }
   }
 }

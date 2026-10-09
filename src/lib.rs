@@ -45,7 +45,7 @@ mod value;
 
 pub use error::{Error, ErrorKind, Frame, Span};
 pub use html::Html;
-pub use types::{HtmlType, Type};
+pub use types::{HtmlType, Type, declare_types};
 pub use value::Value;
 
 use ast::Function;

@@ -117,6 +117,38 @@ function functionScope(document, name, documents) {
     .map((candidate) => ({ document: candidate, definitions: named(candidate, false) }));
 }
 
+/** What the built-in types are, for hovers. The host's types are declared by its types command. */
+const BUILT_IN_TYPES = {
+  String: "Text.",
+  Bool: "`true` or `false`.",
+  Flow: "Html that goes in a `<body>`, such as paragraphs, lists, and links.",
+  Phrasing: "Html that goes in a line of text, such as `<span>`, `<a>`, and `<em>`.",
+  Metadata: "Html that goes in a `<head>`, such as `<meta>`, styles, and JSON.",
+};
+
+/** The type name at `offset`, such as `Entry`, outside strings and comments. */
+function typeAt(text, offset) {
+  const code = codeOnly(text);
+  let start = offset;
+  while (start > 0 && /[A-Za-z0-9]/.test(code[start - 1])) start -= 1;
+  const name = code.slice(start).match(/^[A-Z][A-Za-z0-9]*/)?.[0];
+  if (!name || start + name.length < offset) return null;
+  return { name, start };
+}
+
+/**
+ * The declaration of the type `name` in the output of the types command, which declares one type
+ * per paragraph starting with its name: the line it starts on, and its text.
+ */
+function declarationIn(text, name) {
+  const lines = text.split("\n");
+  const line = lines.findIndex((candidate) => new RegExp(`^${name}(?![A-Za-z0-9])`).test(candidate));
+  if (line < 0) return null;
+  let end = line;
+  while (end + 1 < lines.length && lines[end + 1].trim() !== "") end += 1;
+  return { line, text: lines.slice(line, end + 1).join("\n") };
+}
+
 function wordOf(text, offset) {
   return text.slice(offset).match(new RegExp(`^${NAME}`))?.[0];
 }
@@ -135,6 +167,48 @@ function lookup(text, offset) {
 function activate(context) {
   const vscode = require("vscode");
   const selector = { language: "bitview" };
+
+  /** The directory that holds views/, where genbit runs. Outside views/, the file's directory. */
+  function projectRoot(uri) {
+    const parts = uri.path.split("/");
+    const views = parts.lastIndexOf("views", parts.length - 2);
+    return uri.with({ path: parts.slice(0, views >= 0 ? views : parts.length - 1).join("/") });
+  }
+
+  // The host's types are declared by a command, such as `genbit types`, run in the project. Its
+  // output is shown as a read-only document, so it never drifts from the host as a file could.
+  const TYPES_SCHEME = "bitview-types";
+  const typesChanged = new vscode.EventEmitter();
+
+  function typesUri(root) {
+    return vscode.Uri.from({ scheme: TYPES_SCHEME, path: `${root.path}/types.bv` });
+  }
+
+  function runTypes(root) {
+    const command = vscode.workspace.getConfiguration("bitview").get("typesCommand");
+    return new Promise((resolve) => {
+      if (!command || !vscode.workspace.isTrusted) {
+        resolve({ error: "the types command runs only in a trusted workspace with bitview.typesCommand set" });
+        return;
+      }
+      require("child_process").exec(command, { cwd: root.fsPath, timeout: 10000 }, (error, stdout, stderr) =>
+        resolve(error ? { error: `${command} failed in ${root.fsPath}: ${stderr || error.message}` } : { text: stdout }),
+      );
+    });
+  }
+
+  /** The declaration of the host type `name` for `document`, and where it is. */
+  async function hostType(document, name) {
+    const root = projectRoot(document.uri);
+    const result = await runTypes(root);
+    if (result.error) {
+      vscode.window.setStatusBarMessage(`bitview: ${result.error}`, 5000);
+      return null;
+    }
+    typesChanged.fire(typesUri(root));
+    const declaration = declarationIn(result.text, name);
+    return declaration && { ...declaration, uri: typesUri(root) };
+  }
 
   /** genbit reads every .bv under views/ as one program. Outside views/, a directory is one. */
   function programRoot(uri) {
@@ -180,6 +254,12 @@ function activate(context) {
     vscode.languages.registerDefinitionProvider(selector, {
       // On a definition itself this returns that definition, and VS Code then shows its references.
       async provideDefinition(document, position) {
+        const type = typeAt(document.getText(), document.offsetAt(position));
+        if (type) {
+          if (type.name in BUILT_IN_TYPES) return null;
+          const declared = await hostType(document, type.name);
+          return declared && new vscode.Location(declared.uri, new vscode.Range(declared.line, 0, declared.line, type.name.length));
+        }
         const found = lookup(document.getText(), document.offsetAt(position));
         if (!found) return null;
         const { symbol, word } = found;
@@ -187,6 +267,30 @@ function activate(context) {
         return functionScope(document, symbol.name, await programDocuments(document)).flatMap((scope) =>
           scope.definitions.map((definition) => location(scope.document, definition.offset, word.length)),
         );
+      },
+    }),
+    vscode.workspace.registerTextDocumentContentProvider(TYPES_SCHEME, {
+      onDidChange: typesChanged.event,
+      async provideTextDocumentContent(uri) {
+        const root = uri.with({ scheme: "file", path: uri.path.slice(0, uri.path.lastIndexOf("/")) });
+        const result = await runTypes(root);
+        return result.error ? `; ${result.error.replaceAll("\n", "\n; ")}` : result.text;
+      },
+    }),
+    vscode.languages.registerHoverProvider(selector, {
+      async provideHover(document, position) {
+        const type = typeAt(document.getText(), document.offsetAt(position));
+        if (!type) return null;
+        const range = new vscode.Range(
+          document.positionAt(type.start),
+          document.positionAt(type.start + type.name.length),
+        );
+        if (type.name in BUILT_IN_TYPES) {
+          return new vscode.Hover(new vscode.MarkdownString(`**${type.name}**: ${BUILT_IN_TYPES[type.name]}`), range);
+        }
+        const declared = await hostType(document, type.name);
+        if (!declared) return null;
+        return new vscode.Hover(new vscode.MarkdownString().appendCodeblock(declared.text, "bitview"), range);
       },
     }),
     vscode.languages.registerReferenceProvider(selector, {
@@ -237,4 +341,14 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, codeOnly, definitionsIn, functionScope, lookup, occurrencesIn };
+module.exports = {
+  activate,
+  deactivate,
+  codeOnly,
+  declarationIn,
+  definitionsIn,
+  functionScope,
+  lookup,
+  occurrencesIn,
+  typeAt,
+};
